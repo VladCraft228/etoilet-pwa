@@ -10,7 +10,7 @@ export const toiletService = {
             const fileExt = formData.imageFile.name.split('.').pop()
             const fileName = `${Date.now()}_toilet.${fileExt}`
 
-            const { data: uploadData, error: uploadError } = await supabase.storage
+            const {error: uploadError } = await supabase.storage
                 .from('toilet-photos')
                 .upload(fileName, formData.imageFile)
 

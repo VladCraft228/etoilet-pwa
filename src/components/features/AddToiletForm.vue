@@ -4,7 +4,13 @@ import BaseModal from '../ui/BaseModal.vue'
 import BaseButton from '../ui/BaseButton.vue'
 import {type ToiletFormData, validateToiletForm} from "../utils/validators.ts";
 
+// Створюємо посилання на прихований інпут
+const fileInput = ref<HTMLInputElement | null>(null)
 
+// Безпечна функція виклику діалогу вибору файлу
+const triggerFileInput = () => {
+  fileInput.value?.click()
+}
 const props = defineProps<{
   isOpen: boolean,
   coords: [number, number] | null
@@ -127,18 +133,18 @@ const submitForm = () => {
 
       <div class="flex flex-col gap-2">
         <span class="text-[10px] uppercase font-bold text-slate-400 ml-1">Фото вбиральні</span>
+
         <div
-            @click="$refs.fileInput.click()"
+            @click="triggerFileInput"
             class="relative h-40 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center overflow-hidden cursor-pointer hover:bg-slate-100 transition-colors"
         >
           <img v-if="photoPreview" :src="photoPreview" class="absolute inset-0 w-full h-full object-cover" />
+
           <div v-else class="flex flex-col items-center gap-2 text-slate-400">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-8 h-8">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a48.324 48.324 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
-              <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
-            </svg>
+            <span class="material-symbols-outlined text-[32px]">add_a_photo</span>
             <span class="text-xs font-medium">Натисніть, щоб додати фото</span>
           </div>
+
           <input type="file" ref="fileInput" class="hidden" accept="image/*" @change="handlePhotoUpload">
         </div>
       </div>
