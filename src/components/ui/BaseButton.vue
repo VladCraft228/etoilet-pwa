@@ -2,7 +2,8 @@
 import { computed } from 'vue'
 
 const props = defineProps<{
-  variant?: 'primary' | 'secondary' | 'outline' | 'ghost'
+  // Додали 'success'
+  variant?: 'primary' | 'secondary' | 'outline' | 'ghost' | 'success'
 }>()
 
 const baseClasses = "w-full flex items-center justify-center gap-2 py-3.5 px-4 rounded-xl font-medium transition-transform active:scale-[0.98]"
@@ -13,6 +14,7 @@ const variantClasses = computed(() => {
     case 'secondary': return "bg-slate-100 text-slate-700 hover:bg-slate-200"
     case 'outline': return "border-2 border-slate-200 text-slate-600 hover:border-slate-300"
     case 'ghost': return "text-slate-400 text-sm hover:text-slate-600 !py-2"
+    case 'success': return "bg-emerald-600 text-white hover:bg-emerald-700"
     default: return "bg-indigo-600 text-white"
   }
 })

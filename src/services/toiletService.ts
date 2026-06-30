@@ -34,6 +34,7 @@ export const toiletService = {
             price: formData.type === 'public' ? formData.price : 0,
             work_hours: formData.type === 'public' ? formData.work_hours : null,
             stalls_count: formData.type === 'public' ? formData.stalls_count : null,
+            urinals_count: formData.type === 'public' ? formData.urinals_count : 0,
             is_lock_broken: formData.type === 'bio' ? formData.is_lock_broken : false,
         }
 

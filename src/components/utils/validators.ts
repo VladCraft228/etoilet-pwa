@@ -8,6 +8,7 @@ export interface ToiletFormData {
     price: number
     work_hours: string
     stalls_count: number
+    urinals_count: number
     is_lock_broken: boolean
     comment: string
 }
