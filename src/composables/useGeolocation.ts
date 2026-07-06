@@ -1,18 +1,20 @@
 // src/composables/useGeolocation.ts
 import { ref } from 'vue'
+import {useToast} from "vue-toastification";
+const toast = useToast()
+
 
 export function useGeolocation() {
     // Цей стан тепер живе тут, але буде доступний всюди, де ми викличемо функцію
     const userLocation = ref<[number, number] | null>(null)
     const isLocating = ref(false)
-
     // Універсальна функція, яка приймає "що робити у разі успіху"
     const getCurrentLocation = (
         onSuccess: (lat: number, lng: number) => void,
         onErrorFallback?: () => void
     ) => {
         if (!navigator.geolocation) {
-            alert('Геолокація не підтримується вашим пристроєм або браузером.')
+            toast.error('Геолокація не підтримується вашим пристроєм або браузером.')
             return
         }
 
@@ -30,7 +32,7 @@ export function useGeolocation() {
             (error) => {
                 console.warn('GPS Error:', error)
                 isLocating.value = false
-                alert('Помилка геолокації. Дозвольте доступ до місцезнаходження або посуньте карту вручну.')
+                toast.warning('Помилка геолокації. Будь ласка, дозвольте доступ до геопозиції або знайдіть місце на карті вручну.')
 
                 if (onErrorFallback) onErrorFallback()
             },

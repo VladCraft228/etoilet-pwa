@@ -1,5 +1,7 @@
 import { ref } from 'vue'
 import { routingService } from '../services/routingService'
+import {useToast} from "vue-toastification";
+const toast = useToast()
 
 // Функція для розрахунку відстані по прямій між двома координатами (в метрах)
 function getStraightDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
@@ -89,7 +91,9 @@ export function useRouting() {
                 mins: Math.ceil(straightDist / 83.3),
                 type: 'direct'
             }
-            alert('Побудований маршрут занадто довгий через відсутність стежок на карті. Показуємо напрямок навпростець.')
+            toast.warning('Побудований маршрут занадто довгий через відсутність стежок на карті. Показуємо напрямок навпростець.', {
+                timeout: 6000
+            })
         }
 
         return true

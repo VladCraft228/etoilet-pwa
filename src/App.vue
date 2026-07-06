@@ -1,27 +1,33 @@
 <script setup lang="ts">
 // 1. ІМПОРТИ ТА БІБЛІОТЕКИ
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, defineAsyncComponent } from 'vue' // <-- Додали defineAsyncComponent
 import L from 'leaflet'
-import {LMap, LMarker, LPopup, LIcon, LPolyline} from '@vue-leaflet/vue-leaflet'
+import { LMap, LMarker, LPopup, LIcon, LPolyline } from '@vue-leaflet/vue-leaflet'
 
 import 'leaflet/dist/leaflet.css'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import '@maplibre/maplibre-gl-leaflet'
 
-// 1.1 КОМПОНЕНТИ ТА СЕРВІСИ
-import MapControls from './components/map/MapControls.vue'
-import ToiletPopupCard from './components/map/ToiletPopupCard.vue'
-import LocationPrompt from './components/features/LocationPrompt.vue'
-import AddToiletForm from './components/features/AddToiletForm.vue'
-import AddressSearchModal from './components/features/AddressSearchModal.vue'
-import WelcomeModal from './components/features/WelcomeModal.vue'
+// 1.1 СЕРВІСИ ТА КОМПОЗИЦІЙНІ ФУНКЦІЇ (Вантажаться одразу)
 import { toiletService } from './services/toiletService'
 import { useGeolocation } from './composables/useGeolocation.ts'
 import { useRouting } from './composables/useRouting.ts'
+
+// 1.2 БАЗОВІ КОМПОНЕНТИ КАРТИ (Критичні для першого рендеру)
+import MapControls from './components/map/MapControls.vue'
+import ToiletPopupCard from './components/map/ToiletPopupCard.vue'
 import ToiletTargetingOverlay from "./components/map/ToiletTargetingOverlay.vue";
 import UserTargetingOverlay from "./components/map/UserTargetingOverlay.vue";
 import RouteInfoBanner from "./components/map/RouteInfoBanner.vue";
-import RouteChoiceModal from "./components/features/RouteChoiceModal.vue";
+import {useToast} from "vue-toastification";
+import {supabase} from "./supabase.ts";
+
+// 1.3 ЛІНИВІ КОМПОНЕНТИ ТА ВІКНА (Завантажаться з мережі ТІЛЬКИ при відкритті)
+const LocationPrompt = defineAsyncComponent(() => import('./components/features/LocationPrompt.vue'))
+const AddToiletForm = defineAsyncComponent(() => import('./components/features/AddToiletForm.vue'))
+const AddressSearchModal = defineAsyncComponent(() => import('./components/features/AddressSearchModal.vue'))
+const WelcomeModal = defineAsyncComponent(() => import('./components/features/WelcomeModal.vue'))
+const RouteChoiceModal = defineAsyncComponent(() => import('./components/features/RouteChoiceModal.vue'))
 
 // 2. КОМПОЗИЦІЙНІ ФУНКЦІЇ (Composables)
 const { userLocation, isLocating, getCurrentLocation } = useGeolocation()
@@ -47,6 +53,28 @@ const isPickingToiletMode = ref(false)
 const selectedToiletCoords = ref<[number, number] | null>(null)
 const addressSearchContext = ref<'user' | 'toilet'>('user')
 
+// 3.3 СТАН ОНОВЛЕННЯ ДАНИХ
+const toast = useToast()
+const hasNewData = ref(false) // Чи з'явилися нові точки на сервері
+
+// Функція для завантаження даних (винесли окремо, щоб викликати повторно)
+const loadToiletsData = async () => {
+  try {
+    const data = await toiletService.fetchApprovedToilets()
+    if (data) approvedToilets.value = data
+  } catch (error) {
+    console.error('Помилка завантаження точок:', error)
+  }
+}
+
+// Функція, яка спрацьовує при кліку на кнопку "Оновити"
+const refreshMapData = async () => {
+  toast.info('Оновлюємо карту...', { timeout: 1500 })
+  await loadToiletsData()
+  hasNewData.value = false
+  toast.success('Карта успішно оновлена!')
+}
+
 // 4. ОБЧИСЛЮВАНІ ВЛАСТИВОСТІ (Computed)
 const currentMapCenter = computed<[number, number]>(() => {
   if (Array.isArray(center.value)) return [center.value[0], center.value[1]]
@@ -60,12 +88,20 @@ onMounted(async () => {
     showWelcomeModal.value = true
   }
 
-  try {
-    const data = await toiletService.fetchApprovedToilets()
-    if (data) approvedToilets.value = data
-  } catch (error) {
-    console.error('Помилка завантаження точок:', error)
-  }
+  // 1. Первинне завантаження
+  await loadToiletsData()
+
+  // 2. Підписуємось на зміни в базі даних Supabase (Realtime)
+  supabase
+      .channel('public:toilets')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'toilets' }, () => {
+        // Якщо відбулася будь-яка зміна в таблиці toilets - показуємо кнопку і тост
+        if (!hasNewData.value) {
+          hasNewData.value = true
+          toast.warning('Знайдено нові дані! Оновіть карту.')
+        }
+      })
+      .subscribe()
 })
 
 // 6. ФУНКЦІЇ ТА ЛОГІКА
@@ -124,10 +160,12 @@ const handleFormSubmit = async (formData: any) => {
   try {
     await toiletService.addToilet(formData)
     isAddFormOpen.value = false
-    alert('Дякуємо! Вбиральня надіслана на перевірку модераторам.')
+    toast.success('Дякуємо! Вбиральню успішно надіслано на перевірку модераторам.', {
+      timeout: 5000
+    })
   } catch (error: any) {
     console.error('Помилка відправки в базу:', error.message)
-    alert('Сталася помилка при відправці. Спробуйте ще раз.')
+    toast.error('Сталася помилка під час збереження. Будь ласка, спробуйте ще раз.')
   }
 }
 
@@ -176,7 +214,9 @@ const handleInternalRoute = async () => {
   if (!targetToiletForRoute.value) return
 
   if (!userLocation.value) {
-    alert('Спочатку визначте своє розташування (кнопка прицілу внизу екрана), щоб ми знали звідки будувати маршрут.')
+    toast.info('Увімкніть геолокацію (кнопка прицілу внизу), щоб ми знали, звідки прокладати маршрут.', {
+      timeout: 5000
+    })
     return
   }
 
@@ -230,6 +270,25 @@ const handleInternalRoute = async () => {
     />
 
     <RouteInfoBanner :info="routeInfo" @close="clearRoute" />
+
+    <transition
+        enter-active-class="transition duration-300 ease-out"
+        enter-from-class="transform -translate-y-10 opacity-0"
+        enter-to-class="transform translate-y-0 opacity-100"
+        leave-active-class="transition duration-200 ease-in"
+        leave-from-class="transform translate-y-0 opacity-100"
+        leave-to-class="transform -translate-y-10 opacity-0"
+    >
+      <div v-if="hasNewData" class="absolute top-24 left-1/2 -translate-x-1/2 z-1000">
+        <button
+            @click="refreshMapData"
+            class="flex items-center gap-2 px-5 py-2.5 bg-white text-indigo-600 font-bold text-sm rounded-full shadow-lg border border-slate-100 hover:bg-slate-50 active:scale-95 transition-all"
+        >
+          <span class="material-symbols-outlined text-[18px] animate-spin-slow">sync</span>
+          Оновити карту
+        </button>
+      </div>
+    </transition>
 
     <l-map
         v-model:zoom="zoom"

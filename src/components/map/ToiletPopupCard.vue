@@ -1,14 +1,22 @@
 <script setup lang="ts">
 // Приймаємо дані про конкретний туалет як пропс
+import {getThumbnailUrl} from "../utils/imageUtils.ts";
+
 defineProps<{ toilet: any }>()
 const emit = defineEmits(['build-route'])
 </script>
 
 <template>
-  <div class="flex flex-col gap-1 min-w-[170px] font-sans">
+  <div class="flex flex-col gap-1 min-w-42.5 font-sans">
 
     <div v-if="toilet.toilet_images && toilet.toilet_images.length > 0" class="mb-2 -mt-1 overflow-hidden rounded-t-lg">
-      <img :src="toilet.toilet_images[0].image_url" class="w-full h-36 object-cover" alt="Фото вбиральні" />
+      <img
+          :src="getThumbnailUrl(toilet.toilet_images[0].image_url)"
+          loading="lazy"
+          decoding="async"
+          class="w-full h-36 object-cover bg-slate-100"
+          alt="Фото вбиральні"
+      />
     </div>
 
     <h3 class="font-bold text-slate-800 text-base">

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 defineProps<{
-  // Оновили типізацію, щоб ловити type
   info: { distance: number; mins: number; type: 'osrm' | 'direct' } | null
 }>()
 
@@ -13,7 +12,7 @@ const emit = defineEmits(['close'])
 
       <div class="flex items-center gap-3">
         <div :class="['p-2 rounded-xl text-white shadow-sm', info.type === 'direct' ? 'bg-amber-500' : 'bg-indigo-600']">
-          <span class="material-symbols-outlined text-[24px]">
+          <span class="material-symbols-outlined text-[24px] align-bottom">
             {{ info.type === 'direct' ? 'explore' : 'directions_walk' }}
           </span>
         </div>
@@ -29,7 +28,7 @@ const emit = defineEmits(['close'])
       </div>
 
       <button @click="emit('close')" class="bg-slate-100 hover:bg-slate-200 text-slate-600 p-2 rounded-full transition-colors active:scale-95">
-        <span class="material-symbols-outlined text-[20px]">close</span>
+        <span class="material-symbols-outlined text-[20px] align-bottom">close</span>
       </button>
 
     </div>

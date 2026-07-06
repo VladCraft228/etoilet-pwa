@@ -3,9 +3,13 @@ import {reactive, ref} from 'vue'
 import BaseModal from '../ui/BaseModal.vue'
 import BaseButton from '../ui/BaseButton.vue'
 import {type ToiletFormData, validateToiletForm} from "../utils/validators.ts"
+import imageCompression from 'browser-image-compression'
+import {useToast} from "vue-toastification";
 
 // Створюємо посилання на прихований інпут
 const fileInput = ref<HTMLInputElement | null>(null)
+
+const toast = useToast()
 
 // Безпечна функція виклику діалогу вибору файлу
 const triggerFileInput = () => {
@@ -34,16 +38,38 @@ const form = reactive<ToiletFormData>({
 const photoPreview = ref<string | null>(null)
 const rawFile = ref<File | null>(null)
 
-const handlePhotoUpload = (event: Event) => {
+const handlePhotoUpload = async (event: Event) => {
   const target = event.target as HTMLInputElement
   if (target.files && target.files[0]) {
-    rawFile.value = target.files[0]
+    const originalFile = target.files[0]
 
+    // Показуємо прев'юшку одразу з оригінального файлу (щоб користувач не чекав)
     const reader = new FileReader()
     reader.onload = (e) => {
       photoPreview.value = e.target?.result as string
     }
-    reader.readAsDataURL(target.files[0])
+    reader.readAsDataURL(originalFile)
+
+    try {
+      // НАЛАШТУВАННЯ СТИСНЕННЯ
+      const options = {
+        maxSizeMB: 0.3,          // Максимальний розмір: 300 КБ (ідеально для мапи)
+        maxWidthOrHeight: 1024,  // Максимальна роздільна здатність: 1024px
+        useWebWorker: true       // Використовувати фоновий потік (щоб форма не зависла)
+      }
+
+      // Магія: стискаємо файл!
+      console.log(`Оригінал: ${(originalFile.size / 1024 / 1024).toFixed(2)} MB`)
+      const compressedFile = await imageCompression(originalFile, options)
+      console.log(`Стиснуто: ${(compressedFile.size / 1024 / 1024).toFixed(2)} MB`)
+
+      // Зберігаємо вже СТИСНУТИЙ файл для відправки в базу
+      rawFile.value = compressedFile
+    } catch (error) {
+      console.error('Помилка стиснення зображення:', error)
+      // Якщо щось пішло не так, фолбек на оригінал, щоб не зламати флоу
+      rawFile.value = originalFile
+    }
   }
 }
 
@@ -54,7 +80,7 @@ const is24Hours = ref(false)
 
 const submitForm = () => {
   if (!props.coords) {
-    alert('Не вдалося визначити координати точки.')
+    toast.error('Не вдалося визначити точні координати точки. Спробуйте ще раз.')
     return
   }
 
@@ -71,7 +97,7 @@ const submitForm = () => {
 
   const errorMessage = validateToiletForm(form, !!photoPreview.value)
   if (errorMessage) {
-    alert(errorMessage)
+    toast.error(errorMessage)
     return
   }
 
