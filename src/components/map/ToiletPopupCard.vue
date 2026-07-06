@@ -75,7 +75,7 @@ const emit = defineEmits(['build-route'])
       </span>
     </div>
 
-    <div class="flex flex-col gap-1 min-w-[170px] font-sans">
+    <div class="flex flex-col gap-1 min-w-42.5 font-sans">
       <button
           @click="emit('build-route', toilet)"
           class="mt-2 w-full flex items-center justify-center gap-1.5 bg-indigo-600 text-white text-xs font-bold py-2 rounded-lg hover:bg-indigo-700 active:scale-95 transition-all shadow-sm"

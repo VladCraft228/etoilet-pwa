@@ -5,20 +5,24 @@ export const toiletService = {
     async addToilet(formData: any) {
         let uploadedImageUrl = null
 
-        // 1. Завантажуємо фото в Storage (це залишається без змін)
+// 1. Завантажуємо фото в Storage одразу в папку compressed
         if (formData.imageFile) {
-            const fileExt = formData.imageFile.name.split('.').pop()
-            const fileName = `${Date.now()}_toilet.${fileExt}`
+            const fileExt = formData.imageFile.name.split('.').pop() || 'jpeg'
+            const timestamp = Date.now()
 
-            const {error: uploadError } = await supabase.storage
-                .from('toilet-photos')
-                .upload(fileName, formData.imageFile)
+            // Магія: формуємо шлях прямо у підпапку із суфіксом _compressed
+            const uploadPath = `compressed/${timestamp}_toilet_compressed.${fileExt}`
+
+            const { error: uploadError } = await supabase.storage
+                .from('toilet-photos') // перевір, щоб назва бакета збігалася (toilet-photos)
+                .upload(uploadPath, formData.imageFile)
 
             if (uploadError) throw new Error('Не вдалося завантажити фотографію у сховище.')
 
+            // Отримуємо публічний URL вже для цього нового шляху
             const { data: publicUrlData } = supabase.storage
                 .from('toilet-photos')
-                .getPublicUrl(fileName)
+                .getPublicUrl(uploadPath)
 
             uploadedImageUrl = publicUrlData.publicUrl
         }
