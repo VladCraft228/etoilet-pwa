@@ -14,7 +14,7 @@ const emit = defineEmits(['build-route'])
           :src="getThumbnailUrl(toilet.toilet_images[0].image_url)"
           loading="lazy"
           decoding="async"
-          class="w-full h-36 object-cover bg-slate-100"
+          class="w-full h-44 object-cover bg-slate-100"
           alt="Фото вбиральні"
       />
     </div>

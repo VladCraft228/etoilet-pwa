@@ -3,3 +3,34 @@
 body {
     @apply m-0 p-0;
 }
+
+/* 1. Прибираємо жахливі білі рамки та робимо круглі кути */
+.maplibregl-popup-content {
+    padding: 0 !important;
+    border-radius: 16px !important;
+    box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1) !important;
+    border: none !important;
+    overflow: hidden; /* Щоб фотографія не вилазила за круглі кути */
+}
+
+/* 2. Робимо красивим хрестик закриття */
+.maplibregl-popup-close-button {
+    font-size: 24px !important;
+    color: #475569 !important; /* Сірий колір Tailwind (slate-600) */
+    padding: 4px 8px !important;
+    right: 8px !important;
+    top: 8px !important;
+    border-radius: 50% !important;
+    transition: all 0.2s !important;
+    background-color: rgba(255, 255, 255, 0.8) !important; /* Напівпрозорий білий фон */
+}
+
+.maplibregl-popup-close-button:hover {
+    background-color: #f1f5f9 !important; /* slate-100 при наведенні */
+    color: #0f172a !important;
+}
+
+/* 3. Трохи стилізуємо трикутник (стрілочку) внизу попапу */
+.maplibregl-popup-tip {
+    border-top-color: #ffffff !important;
+}

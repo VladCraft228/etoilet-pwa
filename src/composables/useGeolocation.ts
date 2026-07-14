@@ -1,15 +1,16 @@
 // src/composables/useGeolocation.ts
-import { ref } from 'vue'
-import {useToast} from "vue-toastification";
+import { ref, onUnmounted } from 'vue'
+import { useToast } from "vue-toastification"
+
 const toast = useToast()
 
-
 export function useGeolocation() {
-    // Цей стан тепер живе тут, але буде доступний всюди, де ми викличемо функцію
     const userLocation = ref<[number, number] | null>(null)
     const isLocating = ref(false)
-    // Універсальна функція, яка приймає "що робити у разі успіху"
-    const getCurrentLocation = (
+    const watchId = ref<number | null>(null) // Зберігаємо ID відстеження
+
+    // 1. Початок постійного відстеження (Real-time)
+    const startTrackingLocation = (
         onSuccess: (lat: number, lng: number) => void,
         onErrorFallback?: () => void
     ) => {
@@ -18,32 +19,55 @@ export function useGeolocation() {
             return
         }
 
+        // Якщо вже відстежуємо — спочатку скидаємо старий watch
+        stopTrackingLocation()
+
         isLocating.value = true
 
-        navigator.geolocation.getCurrentPosition(
+        watchId.value = navigator.geolocation.watchPosition(
             (position) => {
                 const { latitude, longitude } = position.coords
-                userLocation.value = [latitude, longitude] // Зберігаємо для маркера на карті
+                userLocation.value = [latitude, longitude]
                 isLocating.value = false
 
-                // Викликаємо колбек і передаємо йому координати
+                // Колбек тепер викликатиметься постійно при русі користувача
                 onSuccess(latitude, longitude)
             },
             (error) => {
                 console.warn('GPS Error:', error)
                 isLocating.value = false
-                toast.warning('Помилка геолокації. Будь ласка, дозвольте доступ до геопозиції або знайдіть місце на карті вручну.')
+                toast.warning('Помилка геолокації. Будь ласка, дозвольте доступ або знайдіть місце вручну.')
 
                 if (onErrorFallback) onErrorFallback()
             },
-            { enableHighAccuracy: true }
+            {
+                enableHighAccuracy: true, // Максимальна точність (використовує GPS)
+                maximumAge: 0,             // Не використовувати закешовану позицію
+                timeout: 10000             // Очікувати відповідь не довше 10 сек
+            }
         )
     }
 
-    // Повертаємо змінні та функції назовні, щоб їх міг взяти App.vue
+    // 2. Функція для зупинки відстеження (щоб не садити батарею користувача)
+    const stopTrackingLocation = () => {
+        if (watchId.value !== null) {
+            navigator.geolocation.clearWatch(watchId.value)
+            watchId.value = null
+            isLocating.value = false
+            console.log('⏹️ Відстеження геолокації зупинено.')
+        }
+    }
+
+    // Очищаємо підписку при знищенні компонента
+    onUnmounted(() => {
+        stopTrackingLocation()
+    })
+
     return {
         userLocation,
         isLocating,
-        getCurrentLocation
+        isTracking: ref(watchId.value !== null), // Стан: чи активний трекінг зараз
+        startTrackingLocation,
+        stopTrackingLocation
     }
 }

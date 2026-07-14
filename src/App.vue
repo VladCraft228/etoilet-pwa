@@ -1,48 +1,48 @@
 <script setup lang="ts">
-// 1. Імпортуємо shallowRef замість ref для карти та маркерів
-import {ref, shallowRef, computed, onMounted, watch, markRaw, defineAsyncComponent} from 'vue'
+import { ref, watch, onMounted, defineAsyncComponent } from 'vue'
 import maplibregl from 'maplibre-gl'
-
 import 'maplibre-gl/dist/maplibre-gl.css'
 
-// 1.1 СЕРВІСИ ТА КОМПОЗИЦІЙНІ ФУНКЦІЇ
+// СЕРВІСИ ТА КОМПОЗИЦІЙНІ ФУНКЦІЇ
 import { toiletService } from './services/toiletService'
-import { useGeolocation } from './composables/useGeolocation.ts'
-import { useRouting } from './composables/useRouting.ts'
+import { useGeolocation } from './composables/useGeolocation'
+import { useRouting } from './composables/useRouting'
+import { useMap } from './composables/useMap' // <-- НАШ НОВИЙ COMPOSABLE
+import { useToast } from "vue-toastification"
+import { supabase } from "./supabase"
 
-// 1.2 БАЗОВІ КОМПОНЕНТИ КАРТИ
+// БАЗОВІ КОМПОНЕНТИ КАРТИ
 import MapControls from './components/map/MapControls.vue'
 import ToiletTargetingOverlay from "./components/map/ToiletTargetingOverlay.vue"
 import UserTargetingOverlay from "./components/map/UserTargetingOverlay.vue"
 import RouteInfoBanner from "./components/map/RouteInfoBanner.vue"
-import { useToast } from "vue-toastification"
-import { supabase } from "./supabase.ts"
-import ToiletPopupCard from "./components/map/ToiletPopupCard.vue";
+import ToiletPopupCard from "./components/map/ToiletPopupCard.vue"
 
-// 1.3 ЛІНИВІ КОМПОНЕНТИ ТА ВІКНА
+// ЛІНИВІ КОМПОНЕНТИ ТА ВІКНА
 const LocationPrompt = defineAsyncComponent(() => import('./components/features/LocationPrompt.vue'))
 const AddToiletForm = defineAsyncComponent(() => import('./components/features/AddToiletForm.vue'))
 const AddressSearchModal = defineAsyncComponent(() => import('./components/features/AddressSearchModal.vue'))
 const WelcomeModal = defineAsyncComponent(() => import('./components/features/WelcomeModal.vue'))
 const RouteChoiceModal = defineAsyncComponent(() => import('./components/features/RouteChoiceModal.vue'))
 
-// 2. КОМПОЗИЦІЙНІ ФУНКЦІЇ (Composables)
-const { userLocation, isLocating, getCurrentLocation } = useGeolocation()
+// Ініціалізація композиційних функцій
+const { userLocation, isLocating, startTrackingLocation, stopTrackingLocation } = useGeolocation()
 const { activeRouteCoords, routeInfo, buildRoute, clearRoute } = useRouting()
+const {
+  map,
+  toiletMarkers,
+  temporaryClickedCoords,
+  initMap,
+  flyToCoords,
+  clearToiletMarkers
+} = useMap()
 
-// 3. РЕАКТИВНИЙ СТАН КАРТИ MAPLIBRE
-ref<HTMLElement | null>(null);
-const map = shallowRef<any>(null) // Гнучке посилання без глибокої реактивності
+// Маркер користувача (локальний для App.vue, щоб не перевантажувати глобальний стан)
+let userLocationMarker: maplibregl.Marker | null = null
 
-const zoom = ref(13)
-const center = ref<[number, number]>([35.0461, 48.4647]) // [lng, lat]
+// СТАН КАРТИ ТА МОДАЛОК
+const isFollowUserActive = ref(false)
 const approvedToilets = ref<any[]>([])
-
-// ВИПРАВЛЕННЯ: Використовуємо shallowRef<any[]>, щоб TS не сканував нутрощі класів маркерів
-const toiletMarkers = shallowRef<any[]>([])
-let userLocationMarker: any = null
-
-// 3.1 СТАН МОДАЛЬНИХ ВІКОН
 const showWelcomeModal = ref(false)
 const showLocationPrompt = ref(false)
 const showRouteChoiceModal = ref(false)
@@ -50,17 +50,22 @@ const targetToiletForRoute = ref<any>(null)
 const isAddressSearchOpen = ref(false)
 const isAddFormOpen = ref(false)
 
-// 3.2 СТАН РЕЖИМІВ КАРТИ
+// СТАН РЕЖИМІВ КАРТИ
 const isManualSelectionMode = ref(false)
 const isPickingToiletMode = ref(false)
 const selectedToiletCoords = ref<[number, number] | null>(null)
 const addressSearchContext = ref<'user' | 'toilet'>('user')
 
-// 3.3 СТАН ОНОВЛЕННЯ ДАНИХ
+// СТАН ОНОВЛЕННЯ ДАНИХ
 const toast = useToast()
 const hasNewData = ref(false)
 
-// Функція для завантаження даних з бази
+// Попапи
+const popupContentRef = ref<HTMLElement | null>(null)
+const activeToiletForPopup = ref<any>(null)
+let activeMapPopup: maplibregl.Popup | null = null
+
+// ЗАВАНТАЖЕННЯ ДАНИХ
 const loadToiletsData = async () => {
   try {
     const data = await toiletService.fetchApprovedToilets()
@@ -77,142 +82,88 @@ const refreshMapData = async () => {
   toast.success('Карта успішно оновлена!')
 }
 
-// Отримання поточного центру
-const currentMapCenter = computed<[number, number]>(() => {
-  if (!map.value) return center.value
-  const c = map.value.getCenter()
-  return [c.lng, c.lat]
-})
-
-// Посилання на HTML-контейнер нашого попапу
-const popupContentRef = ref<HTMLElement | null>(null)
-// Дані туалету, які зараз показуються в попапі
-const activeToiletForPopup = ref<any>(null)
-// Глобальне посилання на попап MapLibre (щоб ми могли його видаляти)
-let activeMapPopup: maplibregl.Popup | null = null
-
-// Функція, яка зловить клік з компонента і побудує маршрут
-const handlePopupRoute = () => {
-  if (activeMapPopup) activeMapPopup.remove() // Закриваємо віконце
-  if (activeToiletForPopup.value) {
-    openRouteChoice(activeToiletForPopup.value) // Відкриваємо модалку маршруту
-  }
-}
-
-// 5. ЖИТТЄВИЙ ЦИКЛ & ІНІЦІАЛІЗАЦІЯ 3D КАРТИ
+// ЖИТТЄВИЙ ЦИКЛ (Ініціалізація карти)
 onMounted(() => {
-  console.log('🚀 Старт ініціалізації карти...');
-
   const isWelcomeHidden = localStorage.getItem('hideAlphaWelcome')
   if (isWelcomeHidden !== 'true') {
     showWelcomeModal.value = true
   }
 
-  // Створюємо карту, передаючи ID рядком, а не Vue-змінною
-  const mapInstance = new maplibregl.Map({
-    container: 'main-map',
-    style: 'https://tiles.openfreemap.org/styles/liberty',
-    center: center.value,
-    zoom: zoom.value,
-
-    // Блокуємо 3D-нахили
-    pitch: 0,
-    dragPitch: false,
-    touchPitch: false, // Забороняємо нахил двома пальцями на мобілках
-
-    // МАГІЯ РОЗДІЛЕННЯ ПК ТА МОБІЛОК:
-    dragRotate: false,       // Блокуємо обертання правою кнопкою миші (ПК)
-    touchZoomRotate: true,   // ДОЗВОЛЯЄМО обертання двома пальцями (Мобілки)
-
-    maxZoom: 19,
-    minZoom: 5
+  // Створюємо карту через composable
+  const mapInstance = initMap('main-map', () => {
+    if (isFollowUserActive.value) {
+      stopTrackingLocation()
+      isFollowUserActive.value = false
+    }
   })
 
-  console.log('✅ Інстанс створено:', mapInstance);
-
-  mapInstance.addControl(new maplibregl.NavigationControl({
-    visualizePitch: true
-  }), 'bottom-right')
-
-  // ХАК: Змушуємо карту перерахувати свої розміри після того, як вона завантажиться
-  mapInstance.on('load', () => {
-    console.log('🗺️ Карта завантажила стилі, робимо resize!');
-    mapInstance.resize();
+  // Слухаємо кліки на карті для мануального вибору
+  mapInstance.on('click', (e) => {
+    if (isManualSelectionMode.value || isPickingToiletMode.value) {
+      const { lng, lat } = e.lngLat
+      temporaryClickedCoords.value = [lat, lng]
+      flyToCoords(lng, lat, mapInstance.getZoom())
+    }
   })
 
-  mapInstance.on('moveend', () => {
-    const c = mapInstance.getCenter()
-    center.value = [c.lng, c.lat]
-    zoom.value = mapInstance.getZoom()
-  })
-
-  map.value = markRaw(mapInstance)
-
-  // Запускаємо завантаження даних
   loadToiletsData()
 
-  // Realtime
+  // Realtime Supabase
   supabase
       .channel('public:toilets')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'toilets' }, () => {
-        if (!hasNewData.value) {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'toilets' }, (payload) => {
+        let shouldAlert = false
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          const newData = payload.new as { status?: string } | null
+          if (newData && newData.status === 'approved') shouldAlert = true
+        }
+        if (payload.eventType === 'DELETE') shouldAlert = true
+
+        if (shouldAlert && !hasNewData.value) {
           hasNewData.value = true
-          toast.warning('Знайдено нові дані! Оновіть карту.')
+          toast.warning('Карту було оновлено іншим користувачем! Оновіть сторінку.')
         }
       })
       .subscribe()
 })
 
-// 5.1 WATCHERS ДЛЯ РЕАКТИВНОГО ОНОВЛЕННЯ ЕЛЕМЕНТІВ КАРТИ
+// WATCHERS
+
+// Відображення маркерів туалетів
 watch([approvedToilets, map], ([newToilets, mapInstance]) => {
   if (!mapInstance || !newToilets.length) return
 
-  // Видаляємо старі маркери з карти
-  toiletMarkers.value.forEach(m => m.remove())
-  const newMarkers: any[] = []
+  clearToiletMarkers()
+  const newMarkers: maplibregl.Marker[] = []
 
   newToilets.forEach(toilet => {
-    // 1. СТВОРЮЄМО ОБГОРТКУ (щоб MapLibre і Tailwind не билися за transform)
     const wrapper = document.createElement('div')
-
-    // 2. СТВОРЮЄМО САМ МАРКЕР
     const el = document.createElement('div')
     el.className = 'flex items-center justify-center w-9 h-9 text-white rounded-full shadow-lg border-2 border-white cursor-pointer transition-transform active:scale-90'
     el.className += toilet.type === 'public' ? ' bg-blue-600' : ' bg-emerald-500'
     el.innerHTML = `<span class="material-symbols-outlined text-[20px]">wc</span>`
-
-    // Вкладаємо маркер в обгортку
     wrapper.appendChild(el)
 
-    // 3. ДОДАЄМО ОБРОБНИК КЛІКУ ТА ПОПАП
     wrapper.addEventListener('click', (e) => {
       e.stopPropagation()
-
-      // Передаємо дані клікнутого туалету у наш Vue-компонент
       activeToiletForPopup.value = toilet
 
-      // Якщо вже є відкритий попап — закриваємо його! (Вирішує проблему стакання)
-      if (activeMapPopup) {
-        activeMapPopup.remove()
-      }
+      if (activeMapPopup) activeMapPopup.remove()
 
-      // Трюк: чекаємо 1 тік (nextTick), щоб Vue встиг оновити дані в DOM
       import('vue').then(({ nextTick }) => {
         nextTick(() => {
           if (!popupContentRef.value) return
 
-          // Створюємо попап і передаємо йому готовий HTML-вузол з нашого шаблону
           activeMapPopup = new maplibregl.Popup({
-            closeButton: true, // Можна увімкнути хрестик для зручності
+            closeButton: true,
             closeOnClick: true,
             offset: 20,
             maxWidth: '320px'
           })
-              .setDOMContent(popupContentRef.value!) // Телепортуємо наш Vue-компонент сюди!
+              .setDOMContent(popupContentRef.value!)
               .setLngLat([toilet.longitude, toilet.latitude])
               .addTo(mapInstance)
 
-          // Центруємо камеру на маркері
           mapInstance.flyTo({
             center: [toilet.longitude, toilet.latitude],
             zoom: Math.max(mapInstance.getZoom(), 15),
@@ -222,7 +173,6 @@ watch([approvedToilets, map], ([newToilets, mapInstance]) => {
       })
     })
 
-    // Додаємо маркер на карту (використовуючи обгортку!)
     const marker = new maplibregl.Marker({ element: wrapper })
         .setLngLat([toilet.longitude, toilet.latitude])
         .addTo(mapInstance)
@@ -233,12 +183,14 @@ watch([approvedToilets, map], ([newToilets, mapInstance]) => {
   toiletMarkers.value = newMarkers
 }, { immediate: true })
 
-// Слідкуємо за локацією користувача
-watch(userLocation, (newLoc) => {
+// Переміщення користувача та автоперерахунок маршруту
+watch(userLocation, async (newLoc) => {
   if (!map.value || !newLoc) return
 
+  const [lat, lng] = newLoc
+
   if (userLocationMarker) {
-    userLocationMarker.setLngLat([newLoc[1], newLoc[0]])
+    userLocationMarker.setLngLat([lng, lat])
   } else {
     const el = document.createElement('div')
     el.className = 'relative flex items-center justify-center w-6 h-6'
@@ -247,12 +199,25 @@ watch(userLocation, (newLoc) => {
       <span class="relative inline-flex w-4 h-4 rounded-full bg-indigo-600 border-2 border-white shadow-md"></span>
     `
     userLocationMarker = new maplibregl.Marker({ element: el })
-        .setLngLat([newLoc[1], newLoc[0]])
+        .setLngLat([lng, lat])
         .addTo(map.value)
+  }
+
+  // Автоперебудова маршруту при русі
+  if (targetToiletForRoute.value && (activeRouteCoords.value?.length ?? 0) > 0) {
+    const endCoords: [number, number] = [
+      targetToiletForRoute.value.latitude,
+      targetToiletForRoute.value.longitude
+    ]
+    await buildRoute(newLoc, endCoords)
+  }
+
+  if (!isFollowUserActive.value) {
+    flyToCoords(lng, lat, 16)
   }
 })
 
-// Слідкуємо за побудовою маршруту
+// Рендеринг лінії маршруту на карті
 watch(activeRouteCoords, (coords) => {
   if (!map.value) return
 
@@ -263,7 +228,6 @@ watch(activeRouteCoords, (coords) => {
   }
 
   const lngLatCoords = coords.map(pair => [pair[1], pair[0]])
-
   const geojson: any = {
     type: 'Feature',
     properties: {},
@@ -276,19 +240,12 @@ watch(activeRouteCoords, (coords) => {
   if (map.value.getSource('route')) {
     (map.value.getSource('route') as maplibregl.GeoJSONSource).setData(geojson)
   } else {
-    map.value.addSource('route', {
-      type: 'geojson',
-      data: geojson
-    })
-
+    map.value.addSource('route', { type: 'geojson', data: geojson })
     map.value.addLayer({
       id: 'route',
       type: 'line',
       source: 'route',
-      layout: {
-        'line-join': 'round',
-        'line-cap': 'round'
-      },
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: {
         'line-color': '#4f46e5',
         'line-width': 5,
@@ -299,40 +256,56 @@ watch(activeRouteCoords, (coords) => {
   }
 })
 
-// 6. ФУНКЦІЇ ТА ЛОГІКА
+// ФУНКЦІОНАЛЬНА ЛОГІКА UI
 const handleWelcomeClose = (dontShowAgain: boolean) => {
-  if (dontShowAgain) {
-    localStorage.setItem('hideAlphaWelcome', 'true')
-  }
+  if (dontShowAgain) localStorage.setItem('hideAlphaWelcome', 'true')
   showWelcomeModal.value = false
 }
 
-const flyToCoords = (lng: number, lat: number, targetZoom: number) => {
-  if (map.value) {
-    map.value.flyTo({
-      center: [lng, lat],
-      zoom: targetZoom,
-      essential: true,
-      pitch: 0
-    })
-  }
+const handlePopupRoute = () => {
+  if (activeMapPopup) activeMapPopup.remove()
+  if (activeToiletForPopup.value) openRouteChoice(activeToiletForPopup.value)
 }
 
 const handleGpsLocation = () => {
   showLocationPrompt.value = false
-  getCurrentLocation((lat, lng) => {
-    flyToCoords(lng, lat, 16)
-  })
+
+  if (isFollowUserActive.value) {
+    stopTrackingLocation()
+    isFollowUserActive.value = false
+  } else {
+    isFollowUserActive.value = true
+    startTrackingLocation((lat, lng) => {
+      flyToCoords(lng, lat, 16)
+    }, () => {
+      isFollowUserActive.value = false
+    })
+  }
 }
 
 const handleManualLocation = () => {
   showLocationPrompt.value = false
+  if (isFollowUserActive.value) {
+    stopTrackingLocation()
+    isFollowUserActive.value = false
+  }
   isManualSelectionMode.value = true
 }
 
 const confirmManualLocation = () => {
-  const [lng, lat] = currentMapCenter.value
+  if (!map.value) return
+
+  let lat: number, lng: number
+  if (temporaryClickedCoords.value) {
+    [lat, lng] = temporaryClickedCoords.value
+  } else {
+    const centerCoords = map.value.getCenter()
+    lng = centerCoords.lng
+    lat = centerCoords.lat
+  }
+
   userLocation.value = [lat, lng]
+  temporaryClickedCoords.value = null
   isManualSelectionMode.value = false
 }
 
@@ -341,14 +314,26 @@ const startPickingToiletLocation = () => {
 }
 
 const snapToiletToUserGps = () => {
-  getCurrentLocation((lat, lng) => {
+  startTrackingLocation((lat, lng) => {
     flyToCoords(lng, lat, 18)
+    stopTrackingLocation()
   })
 }
 
 const confirmToiletLocation = () => {
-  const [lng, lat] = currentMapCenter.value
+  if (!map.value) return
+
+  let lat: number, lng: number
+  if (temporaryClickedCoords.value) {
+    [lat, lng] = temporaryClickedCoords.value
+  } else {
+    const centerCoords = map.value.getCenter()
+    lng = centerCoords.lng
+    lat = centerCoords.lat
+  }
+
   selectedToiletCoords.value = [lat, lng]
+  temporaryClickedCoords.value = null
   isPickingToiletMode.value = false
   isAddFormOpen.value = true
 }
@@ -360,7 +345,7 @@ const handleFormSubmit = async (formData: any) => {
     toast.success('Дякуємо! Вбиральню успішно надіслано на перевірку модераторам.', { timeout: 5000 })
   } catch (error: any) {
     console.error('Помилка відправки в базу:', error.message)
-    toast.error('Сталася помилка під час збереження. Будь ласка, спробуйте ще раз.')
+    toast.error('Сталася помилка під час збереження.')
   }
 }
 
@@ -402,7 +387,7 @@ const handleInternalRoute = async () => {
   if (!targetToiletForRoute.value) return
 
   if (!userLocation.value) {
-    toast.info('Увімкніть геолокацію (кнопка прицілу внизу), щоб ми знали, звідки прокладати маршрут.', { timeout: 5000 })
+    toast.info('Увімкніть геолокацію, щоб ми знали, звідки прокладати маршрут.', { timeout: 5000 })
     return
   }
 
@@ -416,6 +401,11 @@ const handleInternalRoute = async () => {
     flyToCoords(toilet.longitude, toilet.latitude, 16)
   }
   isLocating.value = false
+}
+
+const handleClearRoute = () => {
+  clearRoute()
+  targetToiletForRoute.value = null
 }
 </script>
 
@@ -455,7 +445,7 @@ const handleInternalRoute = async () => {
         @close="showRouteChoiceModal = false"
     />
 
-    <RouteInfoBanner :info="routeInfo" @close="clearRoute" />
+    <RouteInfoBanner :info="routeInfo" @close="handleClearRoute" />
 
     <transition
         enter-active-class="transition duration-300 ease-out"
@@ -509,35 +499,3 @@ const handleInternalRoute = async () => {
 
   </main>
 </template>
-<style>
-/* 1. Прибираємо жахливі білі рамки та робимо круглі кути */
-.maplibregl-popup-content {
-  padding: 0 !important;
-  border-radius: 16px !important;
-  box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1) !important;
-  border: none !important;
-  overflow: hidden; /* Щоб фотографія не вилазила за круглі кути */
-}
-
-/* 2. Робимо красивим хрестик закриття */
-.maplibregl-popup-close-button {
-  font-size: 24px !important;
-  color: #475569 !important; /* Сірий колір Tailwind (slate-600) */
-  padding: 4px 8px !important;
-  right: 8px !important;
-  top: 8px !important;
-  border-radius: 50% !important;
-  transition: all 0.2s !important;
-  background-color: rgba(255, 255, 255, 0.8) !important; /* Напівпрозорий білий фон */
-}
-
-.maplibregl-popup-close-button:hover {
-  background-color: #f1f5f9 !important; /* slate-100 при наведенні */
-  color: #0f172a !important;
-}
-
-/* 3. Трохи стилізуємо трикутник (стрілочку) внизу попапу */
-.maplibregl-popup-tip {
-  border-top-color: #ffffff !important;
-}
-</style>

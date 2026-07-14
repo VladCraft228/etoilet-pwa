@@ -1,9 +1,9 @@
 import { ref } from 'vue'
 import { routingService } from '../services/routingService'
-import {useToast} from "vue-toastification";
+import { useToast } from "vue-toastification"
+
 const toast = useToast()
 
-// Функція для розрахунку відстані по прямій між двома координатами (в метрах)
 function getStraightDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
     const R = 6371e3
     const p1 = lat1 * Math.PI / 180
@@ -21,81 +21,100 @@ export function useRouting() {
     const activeRouteCoords = ref<[number, number][] | null>(null)
     const routeInfo = ref<{ distance: number, mins: number, type: 'osrm' | 'direct' } | null>(null)
 
+    // Перевірка приналежності до Монастирського острова
+    const checkIfOnIsland = (coords: [number, number]) => {
+        return coords[0] > 48.4600 && coords[0] < 48.4720 && coords[1] > 35.0730 && coords[1] < 35.0900
+    }
+
     const buildRoute = async (start: [number, number], end: [number, number]) => {
-        // 1. Перевіряємо локації (квадрат Монастирського острова)
-        const isEndOnIsland = end[0] > 48.4600 && end[0] < 48.4720 && end[1] > 35.0730 && end[1] < 35.0900
-        const isStartOnIsland = start[0] > 48.4600 && start[0] < 48.4720 && start[1] > 35.0730 && start[1] < 35.0900
+        const straightDist = getStraightDistance(start[0], start[1], end[0], end[1])
+
+        const isStartOnIsland = checkIfOnIsland(start)
+        const isEndOnIsland = checkIfOnIsland(end)
 
         const bridgeStart: [number, number] = [48.46491, 35.07229] // Материк
         const bridgeEnd: [number, number] = [48.46542, 35.07377]   // Острів
 
-        // Вмикаємо хак, ТІЛЬКИ якщо ми йдемо з материка на острів
-        const needsBridgeHack = isEndOnIsland && !isStartOnIsland
+        const crossBridge = isStartOnIsland !== isEndOnIsland
 
-        // Для сервера OSRM фінішем стає початок мосту (щоб він не губився)
-        const targetForOSRM = needsBridgeHack ? bridgeStart : end
+        try {
+            let finalCoords: [number, number][] = []
+            let totalDistance = 0
 
-        // Відправляємо тільки 2 точки, щоб OSRM не робив "вузлів"
-        const route = await routingService.getWalkingRoute([start, targetForOSRM])
+            if (crossBridge) {
+                // Складний випадок: зшиваємо дві частини через міст за допомогою OSRM
+                if (!isStartOnIsland && isEndOnIsland) {
+                    // Сценарій: Йдемо на острів
+                    // 1. Маршрут по материку до початку мосту
+                    const routeToBridge = await routingService.getWalkingRoute([start, bridgeStart])
+                    // 2. Маршрут по острову від кінця мосту до туалету
+                    const routeOnIsland = await routingService.getWalkingRoute([bridgeEnd, end])
 
-        let isRouteValid = false
-        const straightDist = getStraightDistance(start[0], start[1], end[0], end[1])
+                    const part1 = routeToBridge?.coords || [start, bridgeStart]
+                    const part2 = routeOnIsland?.coords || [bridgeEnd, end]
+                    const dist1 = routeToBridge?.distance || getStraightDistance(start[0], start[1], bridgeStart[0], bridgeStart[1])
+                    const dist2 = routeOnIsland?.distance || getStraightDistance(bridgeEnd[0], bridgeEnd[1], end[0], end[1])
+                    const bridgeDist = getStraightDistance(bridgeStart[0], bridgeStart[1], bridgeEnd[0], bridgeEnd[1])
 
-        if (route && route.coords.length > 0) {
-            const lastPoint = route.coords[route.coords.length - 1]
-            const gapDistance = getStraightDistance(lastPoint[0], lastPoint[1], targetForOSRM[0], targetForOSRM[1])
-
-            // 1. Перевіряємо, чи OSRM довів нас достатньо близько (менше 400м)
-            if (gapDistance < 400) {
-                // 2. НОВИЙ ФІЛЬТР АБСУРДНОСТІ (Detour Ratio)
-                const detourRatio = route.distance / straightDist
-
-                if (detourRatio > 3 && straightDist < 1000) {
-                    console.warn(`Відкинуто абсурдний маршрут! Прямо: ${Math.round(straightDist)}м, в обхід: ${route.distance}м`)
-                    isRouteValid = false // Бракуємо цей маршрут
+                    finalCoords = [...part1, bridgeEnd, ...part2]
+                    totalDistance = dist1 + bridgeDist + dist2
                 } else {
-                    isRouteValid = true  // Маршрут адекватний
-                }
-            }
-        }
+                    // Сценарій: Йдемо з острова на материк
+                    // 1. Маршрут по острову до мосту
+                    const routeToBridge = await routingService.getWalkingRoute([start, bridgeEnd])
+                    // 2. Маршрут по материку від мосту до фінішу
+                    const routeFromBridge = await routingService.getWalkingRoute([bridgeStart, end])
 
-        if (isRouteValid && route) {
-            if (needsBridgeHack) {
-                // ЗШИВАЄМО 3 ШМАТКИ: [Маршрут по набережній] + [Міст] + [Пряма лінія до туалету]
-                activeRouteCoords.value = [start, ...route.coords, bridgeStart, bridgeEnd, end]
+                    const part1 = routeToBridge?.coords || [start, bridgeEnd]
+                    const part2 = routeFromBridge?.coords || [bridgeStart, end]
+                    const dist1 = routeToBridge?.distance || getStraightDistance(start[0], start[1], bridgeEnd[0], bridgeEnd[1])
+                    const dist2 = routeFromBridge?.distance || getStraightDistance(bridgeStart[0], bridgeStart[1], end[0], end[1])
+                    const bridgeDist = getStraightDistance(bridgeStart[0], bridgeStart[1], bridgeEnd[0], bridgeEnd[1])
 
-                // Сумуємо всі відстані для точного розрахунку часу
-                const distBridge = getStraightDistance(bridgeStart[0], bridgeStart[1], bridgeEnd[0], bridgeEnd[1])
-                const distIsland = getStraightDistance(bridgeEnd[0], bridgeEnd[1], end[0], end[1])
-                const totalDist = route.distance + distBridge + distIsland
-
-                routeInfo.value = {
-                    distance: Math.round(totalDist),
-                    mins: Math.ceil(totalDist / 83.3),
-                    type: 'osrm'
+                    finalCoords = [...part1, bridgeStart, ...part2]
+                    totalDistance = dist1 + bridgeDist + dist2
                 }
             } else {
-                // Звичайний маршрут (материк -> материк)
-                activeRouteCoords.value = [start, ...route.coords, end]
-                routeInfo.value = {
-                    distance: Math.round(route.distance),
-                    mins: Math.ceil(route.distance / 83.3),
-                    type: 'osrm'
+                // Простий випадок: обидві точки на материку або обидві на острові
+                const route = await routingService.getWalkingRoute([start, end])
+
+                if (route && route.coords.length > 0) {
+                    const lastCoords = route.coords[route.coords.length - 1]
+                    const isAlreadyAtEnd = lastCoords[0] === end[0] && lastCoords[1] === end[1]
+                    const gapDistance = getStraightDistance(lastCoords[0], lastCoords[1], end[0], end[1])
+
+                    // Якщо OSRM зупинився далі ніж за 5 метрів від туалету, акуратно домальовуємо хвостик
+                    finalCoords = isAlreadyAtEnd ? route.coords : [...route.coords, end]
+                    const extraSegment = isAlreadyAtEnd ? 0 : gapDistance
+                    totalDistance = route.distance + extraSegment
+                } else {
+                    throw new Error("OSRM returned empty route")
                 }
             }
-        } else {
-            // ФОЛБЕК НА ПРЯМУ ЛІНІЮ
-            activeRouteCoords.value = [start, end]
+
+            // Записуємо готовий результат
+            activeRouteCoords.value = finalCoords
             routeInfo.value = {
-                distance: Math.round(straightDist),
-                mins: Math.ceil(straightDist / 83.3),
-                type: 'direct'
+                distance: Math.round(totalDistance),
+                mins: Math.ceil(totalDistance / 83.3),
+                type: 'osrm'
             }
-            toast.warning('Побудований маршрут занадто довгий через відсутність стежок на карті. Показуємо напрямок навпростець.', {
-                timeout: 6000
-            })
+            return true
+
+        } catch (err) {
+            console.warn('Помилка побудови оптимального маршруту, перемикаємось на пряму лінію:', err)
         }
 
+        // 3. ФОЛБЕК НА ПРЯМУ ЛІНІЮ (якщо все зламалося)
+        activeRouteCoords.value = [start, end]
+        routeInfo.value = {
+            distance: Math.round(straightDist),
+            mins: Math.ceil(straightDist / 83.3),
+            type: 'direct'
+        }
+        toast.warning('Маршрут побудовано напряму через особливості ландшафту.', {
+            timeout: 5000
+        })
         return true
     }
 

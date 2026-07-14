@@ -1,15 +1,17 @@
 // src/services/routingService.ts
 
 export const routingService = {
-    // Тепер приймаємо МАСИВ координат
     async getWalkingRoute(points: [number, number][]) {
         try {
-            // Перетворюємо масив [lat, lon] у рядок "lon,lat;lon,lat;lon,lat"
             const coordinatesString = points
                 .map(point => `${point[1]},${point[0]}`)
                 .join(';')
 
-            const url = `https://router.project-osrm.org/route/v1/foot/${coordinatesString}?overview=full&geometries=geojson`
+            // Створюємо рядок радіусів, наприклад: "200;200" для кожної точки
+            const radiusesString = points.map(() => '200').join(';')
+
+            // Додали &radiuses=${radiusesString} у запит
+            const url = `https://router.project-osrm.org/route/v1/foot/${coordinatesString}?overview=full&geometries=geojson&radiuses=${radiusesString}`
 
             const response = await fetch(url)
             const data = await response.json()
