@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, defineAsyncComponent } from 'vue'
+import {ref, watch, onMounted, defineAsyncComponent, onUnmounted} from 'vue'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
@@ -30,11 +30,11 @@ const { userLocation, isLocating, startTrackingLocation, stopTrackingLocation } 
 const { activeRouteCoords, routeInfo, buildRoute, clearRoute } = useRouting()
 const {
   map,
-  toiletMarkers,
   temporaryClickedCoords,
   initMap,
   flyToCoords,
-  clearToiletMarkers
+  fitRouteBounds,
+  updateToiletsClustered
 } = useMap()
 
 // Маркер користувача (локальний для App.vue, щоб не перевантажувати глобальний стан)
@@ -83,6 +83,17 @@ const refreshMapData = async () => {
 }
 
 // ЖИТТЄВИЙ ЦИКЛ (Ініціалізація карти)
+// 1. Оголошуємо змінну каналу на рівні компонента (не всередині функцій)
+let toiletsChannel: any = null
+
+// 2. Виносимо onUnmounted на рівень компонента
+onUnmounted(() => {
+  if (toiletsChannel) {
+    supabase.removeChannel(toiletsChannel)
+  }
+})
+
+// 3. Твій чистий onMounted
 onMounted(() => {
   const isWelcomeHidden = localStorage.getItem('hideAlphaWelcome')
   if (isWelcomeHidden !== 'true') {
@@ -108,79 +119,50 @@ onMounted(() => {
 
   loadToiletsData()
 
-  // Realtime Supabase
-  supabase
-      .channel('public:toilets')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'toilets' }, (payload) => {
-        let shouldAlert = false
-        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-          const newData = payload.new as { status?: string } | null
-          if (newData && newData.status === 'approved') shouldAlert = true
-        }
-        if (payload.eventType === 'DELETE') shouldAlert = true
+  // 4. Функція підписки з об'єднаною логікою (без дублікатів каналу)
+  const subscribeToToiletsRealtime = () => {
+    if (toiletsChannel) {
+      supabase.removeChannel(toiletsChannel)
+    }
 
-        if (shouldAlert && !hasNewData.value) {
-          hasNewData.value = true
-          toast.warning('Карту було оновлено іншим користувачем! Оновіть сторінку.')
-        }
-      })
-      .subscribe()
+    toiletsChannel = supabase
+        .channel('public:toilets')
+        .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'toilets' }, // Виправлено помилку друку: schema замість scheme
+            (payload) => {
+              console.log('Change received!', payload)
+
+              let shouldAlert = false
+              if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+                const newData = payload.new as { status?: string } | null
+                if (newData && newData.status === 'approved') shouldAlert = true
+              }
+              if (payload.eventType === 'DELETE') shouldAlert = true
+
+              if (shouldAlert && !hasNewData.value) {
+                hasNewData.value = true
+                toast.warning('Карту було оновлено іншим користувачем! Оновіть сторінку.')
+              }
+            }
+        )
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            console.log('Successfully subscribed to realtime toilets!')
+          }
+        })
+  }
+
+  // Запуск єдиної підписки
+  subscribeToToiletsRealtime()
 })
 
 // WATCHERS
 
-// Відображення маркерів туалетів
+// Відображення кластеризованих туалетів
 watch([approvedToilets, map], ([newToilets, mapInstance]) => {
   if (!mapInstance || !newToilets.length) return
-
-  clearToiletMarkers()
-  const newMarkers: maplibregl.Marker[] = []
-
-  newToilets.forEach(toilet => {
-    const wrapper = document.createElement('div')
-    const el = document.createElement('div')
-    el.className = 'flex items-center justify-center w-9 h-9 text-white rounded-full shadow-lg border-2 border-white cursor-pointer transition-transform active:scale-90'
-    el.className += toilet.type === 'public' ? ' bg-blue-600' : ' bg-emerald-500'
-    el.innerHTML = `<span class="material-symbols-outlined text-[20px]">wc</span>`
-    wrapper.appendChild(el)
-
-    wrapper.addEventListener('click', (e) => {
-      e.stopPropagation()
-      activeToiletForPopup.value = toilet
-
-      if (activeMapPopup) activeMapPopup.remove()
-
-      import('vue').then(({ nextTick }) => {
-        nextTick(() => {
-          if (!popupContentRef.value) return
-
-          activeMapPopup = new maplibregl.Popup({
-            closeButton: true,
-            closeOnClick: true,
-            offset: 20,
-            maxWidth: '320px'
-          })
-              .setDOMContent(popupContentRef.value!)
-              .setLngLat([toilet.longitude, toilet.latitude])
-              .addTo(mapInstance)
-
-          mapInstance.flyTo({
-            center: [toilet.longitude, toilet.latitude],
-            zoom: Math.max(mapInstance.getZoom(), 15),
-            speed: 1.2
-          })
-        })
-      })
-    })
-
-    const marker = new maplibregl.Marker({ element: wrapper })
-        .setLngLat([toilet.longitude, toilet.latitude])
-        .addTo(mapInstance)
-
-    newMarkers.push(marker)
-  })
-
-  toiletMarkers.value = newMarkers
+  updateToiletsClustered(newToilets, selectToiletById)
 }, { immediate: true })
 
 // Переміщення користувача та автоперерахунок маршруту
@@ -200,7 +182,7 @@ watch(userLocation, async (newLoc) => {
     `
     userLocationMarker = new maplibregl.Marker({ element: el })
         .setLngLat([lng, lat])
-        .addTo(map.value)
+        .addTo(map.value as any)
   }
 
   // Автоперебудова маршруту при русі
@@ -255,6 +237,42 @@ watch(activeRouteCoords, (coords) => {
     })
   }
 })
+
+const selectToiletById = (id: number) => {
+  if (!map.value) return
+
+  // Знаходимо об'єкт туалету за ID
+  const toilet = approvedToilets.value.find(t => t.id === id)
+  if (!toilet) return
+
+  activeToiletForPopup.value = toilet
+
+  // Закриваємо попередній попап, якщо він є
+  if (activeMapPopup) activeMapPopup.remove()
+
+  // Відкриваємо кастомний попап
+  import('vue').then(({ nextTick }) => {
+    nextTick(() => {
+      if (!popupContentRef.value) return
+
+      activeMapPopup = new maplibregl.Popup({
+        closeButton: true,
+        closeOnClick: true,
+        offset: 20,
+        maxWidth: '320px'
+      })
+          .setDOMContent(popupContentRef.value!)
+          .setLngLat([toilet.longitude, toilet.latitude])
+          .addTo(map.value as any)
+
+      map.value!.flyTo({
+        center: [toilet.longitude, toilet.latitude],
+        zoom: Math.max(map.value!.getZoom(), 15),
+        speed: 1.2
+      })
+    })
+  })
+}
 
 // ФУНКЦІОНАЛЬНА ЛОГІКА UI
 const handleWelcomeClose = (dontShowAgain: boolean) => {
@@ -397,8 +415,8 @@ const handleInternalRoute = async () => {
   isLocating.value = true
   const success = await buildRoute(userLocation.value, endCoords)
 
-  if (success) {
-    flyToCoords(toilet.longitude, toilet.latitude, 16)
+  if (success && activeRouteCoords.value) {
+    fitRouteBounds(activeRouteCoords.value)
   }
   isLocating.value = false
 }
@@ -495,6 +513,9 @@ const handleClearRoute = () => {
         :is-locating="isLocating"
         @locate="showLocationPrompt = true"
         @add="startPickingToiletLocation"
+        @zoom-in="map?.zoomIn({ duration: 300 })"
+        @zoom-out="map?.zoomOut({ duration: 300 })"
+        @compass="map?.resetNorthPitch({ duration: 500 })"
     />
 
   </main>
