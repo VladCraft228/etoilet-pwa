@@ -7,7 +7,7 @@ interface ToiletImage {
 }
 
 interface Toilet {
-  id: number;
+  id: string;
   type: 'public' | 'bio';
   price: number;
   work_hours?: string;

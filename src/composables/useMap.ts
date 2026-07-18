@@ -58,7 +58,7 @@ export function useMap() {
     }
 
     // Функція для оновлення туалетів на карті за допомогою кластеризації
-    const updateToiletsClustered = (toilets: any[], onToiletClick: (id: number) => void) => {
+    const updateToiletsClustered = (toilets: any[], onToiletClick: (id: string) => void) => {
         if (!map.value) return
 
         const sourceId = 'toilets'

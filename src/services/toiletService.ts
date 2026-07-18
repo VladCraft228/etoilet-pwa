@@ -5,7 +5,7 @@ export const toiletService = {
     async addToilet(formData: any) {
         let uploadedImageUrl = null
 
-// 1. Завантажуємо фото в Storage одразу в папку compressed
+        // 1. Завантажуємо фото в Storage одразу в папку compressed
         if (formData.imageFile) {
             const fileExt = formData.imageFile.name.split('.').pop() || 'jpeg'
             const timestamp = Date.now()
@@ -68,19 +68,110 @@ export const toiletService = {
         return newToilet
     },
 
-    // Оновлена функція завантаження
+    // Оновлена функція завантаження затверджених
     async fetchApprovedToilets() {
         const { data, error } = await supabase
             .from('toilets')
             .select(`
-        *,
-        toilet_images (
-          image_url
-        )
-      `)
+                *,
+                toilet_images (
+                  image_url
+                )
+            `)
             .eq('status', 'approved')
 
         if (error) throw error
         return data
+    },
+
+    // 1. Отримання вбиралень, що очікують модерації
+    async fetchPendingToilets() {
+        const { data, error } = await supabase
+            .from('toilets')
+            .select(`
+                *,
+                toilet_images (
+                  image_url
+                )
+            `)
+            .eq('status', 'pending')
+            .order('created_at', { ascending: true })
+
+        if (error) throw error
+        return data
+    },
+
+    // 2. Зміна статусу (наприклад, переведення в 'approved')
+    async updateToiletStatus(id: string, status: 'approved' | 'pending' | 'rejected') {
+        const { data, error } = await supabase
+            .from('toilets')
+            .update({ status })
+            .eq('id', id)
+            .select()
+            .single()
+
+        if (error) throw error
+        return data
+    },
+
+    // Оновити будь-які дані вбиральні (для редагування модератором)
+    async updateToiletData(id: string, updates: any) {
+        const { data, error } = await supabase
+            .from('toilets')
+            .update(updates)
+            .eq('id', id)
+            .select()
+            .single()
+
+        if (error) throw new Error(error.message)
+        return data
+    },
+
+    // Оновити фото вбиральні
+    async updateToiletImage(toiletId: string, imageFile: File) {
+        // 1. Завантажуємо нове фото в Storage (якщо в тебе інший бакет - зміни 'toilets')
+        const fileExt = imageFile.name.split('.').pop()
+        const fileName = `${Date.now()}-${Math.random()}.${fileExt}`
+        const filePath = `toilets/${fileName}`
+
+        const { error: uploadError } = await supabase.storage
+            .from('toilets')
+            .upload(filePath, imageFile)
+
+        if (uploadError) throw new Error(`Помилка завантаження: ${uploadError.message}`)
+
+        // 2. Отримуємо публічне посилання
+        const { data: publicUrlData } = supabase.storage
+            .from('toilets')
+            .getPublicUrl(filePath)
+
+        const newImageUrl = publicUrlData.publicUrl
+
+        // 3. Перевіряємо, чи є вже фото у цієї заявки
+        const { data: existingImages } = await supabase
+            .from('toilet_images')
+            .select('id')
+            .eq('toilet_id', toiletId)
+
+        if (existingImages && existingImages.length > 0) {
+            // Якщо є — оновлюємо URL
+            await supabase.from('toilet_images').update({ image_url: newImageUrl }).eq('id', existingImages[0].id)
+        } else {
+            // Якщо не було — створюємо зв'язок
+            await supabase.from('toilet_images').insert({ toilet_id: toiletId, image_url: newImageUrl })
+        }
+
+        return newImageUrl
+    },
+
+    // 3. Повне видалення точки з бази (каскадне видалення в DB само підчистить toilet_images, якщо налаштовано ON DELETE CASCADE)
+    async deleteToilet(id: string) {
+        const { error } = await supabase
+            .from('toilets')
+            .delete()
+            .eq('id', id)
+
+        if (error) throw error
+        return true
     }
 }
