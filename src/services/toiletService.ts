@@ -1,25 +1,24 @@
-// src/services/toiletService.ts
 import { supabase } from '../supabase'
 
 export const toiletService = {
     async addToilet(formData: any) {
         let uploadedImageUrl = null
 
-        // 1. Завантажуємо фото в Storage одразу в папку compressed
+        // 1. Завантажуємо фото в Storage прямо в корінь бакета
         if (formData.imageFile) {
             const fileExt = formData.imageFile.name.split('.').pop() || 'jpeg'
             const timestamp = Date.now()
 
-            // Магія: формуємо шлях прямо у підпапку із суфіксом _compressed
-            const uploadPath = `compressed/${timestamp}_toilet_compressed.${fileExt}`
+            // Зберігаємо в корінь без підпапок і суфіксів
+            const uploadPath = `${timestamp}_toilet.${fileExt}`
 
             const { error: uploadError } = await supabase.storage
-                .from('toilet-photos') // перевір, щоб назва бакета збігалася (toilet-photos)
+                .from('toilet-photos')
                 .upload(uploadPath, formData.imageFile)
 
             if (uploadError) throw new Error('Не вдалося завантажити фотографію у сховище.')
 
-            // Отримуємо публічний URL вже для цього нового шляху
+            // Отримуємо публічний URL
             const { data: publicUrlData } = supabase.storage
                 .from('toilet-photos')
                 .getPublicUrl(uploadPath)
@@ -27,7 +26,7 @@ export const toiletService = {
             uploadedImageUrl = publicUrlData.publicUrl
         }
 
-        // 2. Формуємо дані для таблиці toilets (без поля image_url!)
+        // 2. Формуємо дані для таблиці toilets
         const toiletData = {
             type: formData.type,
             latitude: formData.coords[0],
@@ -42,7 +41,7 @@ export const toiletService = {
             is_lock_broken: formData.type === 'bio' ? formData.is_lock_broken : false,
         }
 
-        // 3. Записуємо туалет і ОБОВ'ЯЗКОВО просимо повернути його ID (.select().single())
+        // 3. Записуємо туалет
         const { data: newToilet, error: toiletError } = await supabase
             .from('toilets')
             .insert(toiletData)
@@ -51,12 +50,12 @@ export const toiletService = {
 
         if (toiletError) throw toiletError
 
-        // 4. Якщо було фото, записуємо його в правильну таблицю toilet_images
+        // 4. Записуємо фото в таблицю toilet_images
         if (uploadedImageUrl && newToilet) {
             const { error: imageError } = await supabase
                 .from('toilet_images')
                 .insert({
-                    toilet_id: newToilet.id, // Прив'язуємо фото до конкретного туалету
+                    toilet_id: newToilet.id,
                     image_url: uploadedImageUrl
                 })
 
@@ -68,7 +67,6 @@ export const toiletService = {
         return newToilet
     },
 
-    // Оновлена функція завантаження затверджених
     async fetchApprovedToilets() {
         const { data, error } = await supabase
             .from('toilets')
@@ -84,7 +82,6 @@ export const toiletService = {
         return data
     },
 
-    // 1. Отримання вбиралень, що очікують модерації
     async fetchPendingToilets() {
         const { data, error } = await supabase
             .from('toilets')
@@ -101,7 +98,6 @@ export const toiletService = {
         return data
     },
 
-    // 2. Зміна статусу (наприклад, переведення в 'approved')
     async updateToiletStatus(id: string, status: 'approved' | 'pending' | 'rejected') {
         const { data, error } = await supabase
             .from('toilets')
@@ -114,7 +110,6 @@ export const toiletService = {
         return data
     },
 
-    // Оновити будь-які дані вбиральні (для редагування модератором)
     async updateToiletData(id: string, updates: any) {
         const { data, error } = await supabase
             .from('toilets')
@@ -127,51 +122,69 @@ export const toiletService = {
         return data
     },
 
-    // Оновити фото вбиральні
+    // Оновлення фото модератором (теж у корінь бакета)
     async updateToiletImage(toiletId: string, imageFile: File) {
-        // 1. Завантажуємо нове фото в Storage (якщо в тебе інший бакет - зміни 'toilets')
-        const fileExt = imageFile.name.split('.').pop()
-        const fileName = `${Date.now()}-${Math.random()}.${fileExt}`
-        const filePath = `toilets/${fileName}`
+        // Оскільки в компоненті ми вже згенерували чисте ім'я файлу на кшталт `id_timestamp.ext`
+        // використовуємо прямо його, щоб не плодити випадкові ранд-рядки
+        const fileName = imageFile.name
 
+        // 1. Завантажуємо в корінь бакета
         const { error: uploadError } = await supabase.storage
-            .from('toilets')
-            .upload(filePath, imageFile)
+            .from('toilet-photos')
+            .upload(fileName, imageFile)
 
         if (uploadError) throw new Error(`Помилка завантаження: ${uploadError.message}`)
 
         // 2. Отримуємо публічне посилання
         const { data: publicUrlData } = supabase.storage
-            .from('toilets')
-            .getPublicUrl(filePath)
+            .from('toilet-photos')
+            .getPublicUrl(fileName)
 
         const newImageUrl = publicUrlData.publicUrl
 
-        // 3. Перевіряємо, чи є вже фото у цієї заявки
+        // 3. Зберігаємо посилання в БД
         const { data: existingImages } = await supabase
             .from('toilet_images')
             .select('id')
             .eq('toilet_id', toiletId)
 
         if (existingImages && existingImages.length > 0) {
-            // Якщо є — оновлюємо URL
             await supabase.from('toilet_images').update({ image_url: newImageUrl }).eq('id', existingImages[0].id)
         } else {
-            // Якщо не було — створюємо зв'язок
             await supabase.from('toilet_images').insert({ toilet_id: toiletId, image_url: newImageUrl })
         }
 
         return newImageUrl
     },
 
-    // 3. Повне видалення точки з бази (каскадне видалення в DB само підчистить toilet_images, якщо налаштовано ON DELETE CASCADE)
-    async deleteToilet(id: string) {
-        const { error } = await supabase
+    async deleteToilet(id: string, imageUrls: string[] = []) {
+        if (imageUrls.length > 0) {
+            const filesToRemove = imageUrls
+                .map(url => {
+                    if (!url) return null;
+                    const cleanUrl = url.split('?')[0];
+                    const parts = cleanUrl.split('/toilet-photos/');
+                    if (parts.length > 1) return parts[1];
+                    return cleanUrl.split('/').pop() || null;
+                })
+                .filter(Boolean) as string[];
+
+            if (filesToRemove.length > 0) {
+                const { error: storageError } = await supabase.storage
+                    .from('toilet-photos')
+                    .remove(filesToRemove);
+
+                if (storageError) {
+                    console.error('Помилка Supabase Storage при видаленні:', storageError.message);
+                }
+            }
+        }
+
+        const { error: dbError } = await supabase
             .from('toilets')
             .delete()
-            .eq('id', id)
+            .eq('id', id);
 
-        if (error) throw error
-        return true
+        if (dbError) throw dbError;
     }
 }

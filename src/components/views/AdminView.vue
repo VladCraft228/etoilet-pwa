@@ -6,7 +6,6 @@ import BaseButton from "../ui/BaseButton.vue"
 import {getThumbnailUrl} from "../utils/imageUtils.ts";
 import imageCompression from "browser-image-compression";
 
-
 const emit = defineEmits(['logout', 'teleport'])
 
 const props = defineProps<{
@@ -42,21 +41,28 @@ const toast = useToast()
 // --- СТАН РЕДАГУВАННЯ ---
 const editingToiletId = ref<string | null>(null)
 const editForm = ref<Partial<Toilet>>({})
+const isCompressing = ref(false)
 const isSaving = ref(false)
+
+// --- ЗМІННІ ДЛЯ ЗРУЧНОГО ВИБОРУ ЧАСУ ---
+const openTime = ref('')
+const closeTime = ref('')
+const is24Hours = ref(false)
 
 // --- СТАН ДЛЯ НОВОГО ФОТО ---
 const fileInput = ref<HTMLInputElement | null>(null)
 const newImageFile = ref<File | null>(null)
 const newImagePreview = ref<string | null>(null)
+const editPhotoPreview = ref<string | null>(null)
 
-// Обробка вибору файлу модератором (зі стисненням)
 const onImageSelected = async (event: Event) => {
   const target = event.target as HTMLInputElement
   if (target.files && target.files.length > 0) {
     const originalFile = target.files[0]
+    const toiletId = editForm.value.id || 'unknown'
 
-    // Показуємо прев'ю одразу з оригіналу
     newImagePreview.value = URL.createObjectURL(originalFile)
+    isCompressing.value = true
 
     try {
       const options = {
@@ -65,14 +71,18 @@ const onImageSelected = async (event: Event) => {
         useWebWorker: true
       }
 
-      console.log(`Оригінал: ${(originalFile.size / 1024 / 1024).toFixed(2)} MB`)
-      const compressedFile = await imageCompression(originalFile, options)
-      console.log(`Стиснуто: ${(compressedFile.size / 1024 / 1024).toFixed(2)} MB`)
+      const compressedBlob = await imageCompression(originalFile, options)
+      const extension = originalFile.name.split('.').pop() || 'jpeg'
+      const fileName = `${toiletId}_${Date.now()}.${extension}`
 
-      newImageFile.value = compressedFile
+      newImageFile.value = new File([compressedBlob], fileName, {
+        type: compressedBlob.type
+      })
     } catch (error) {
       console.error('Помилка стиснення зображення в адмінці:', error)
       newImageFile.value = originalFile
+    } finally {
+      isCompressing.value = false
     }
   }
 }
@@ -107,7 +117,7 @@ const toggleDetails = (id: string) => {
 const handleApprove = async (id: string) => {
   try {
     await toiletService.updateToiletStatus(id, 'approved')
-    toast.success('Вбиральню успішно додано на карту!')
+    toast.success('Вбиральню успешно додано на карту!')
     pendingToilets.value = pendingToilets.value.filter(t => t.id !== id)
   } catch (error: any) {
     toast.error('Помилка при затвердженні.')
@@ -116,9 +126,13 @@ const handleApprove = async (id: string) => {
 
 const handleReject = async (id: string) => {
   if (!confirm('Ви впевнені, що хочете відхилити та видалити цю заявку?')) return
+
+  const toiletToDelete = pendingToilets.value.find(t => t.id === id)
+  const imageUrls = toiletToDelete?.toilet_images?.map(img => img.image_url) || []
+
   try {
-    await toiletService.deleteToilet(id)
-    toast.info('Заявку відхилено та видалено.')
+    await toiletService.deleteToilet(id, imageUrls)
+    toast.info('Заявку та пов’язані фото видалено.')
     pendingToilets.value = pendingToilets.value.filter(t => t.id !== id)
   } catch (error: any) {
     toast.error('Помилка при видаленні.')
@@ -128,14 +142,48 @@ const handleReject = async (id: string) => {
 // --- ЛОГІКА РЕДАГУВАННЯ ---
 const openEditModal = (toilet: Toilet) => {
   editingToiletId.value = toilet.id
-  editForm.value = { ...toilet }
+  editForm.value = JSON.parse(JSON.stringify(toilet))
+
   newImageFile.value = null
   newImagePreview.value = null
+
+  // Розпаршуємо існуючі години роботи для інпутів форми
+  const hours = toilet.work_hours || ''
+  if (hours === 'Цілодобово') {
+    is24Hours.value = true
+    openTime.value = ''
+    closeTime.value = ''
+  } else if (hours.includes(' - ')) {
+    is24Hours.value = false
+    const parts = hours.split(' - ')
+    openTime.value = parts[0] || ''
+    closeTime.value = parts[1] || ''
+  } else {
+    is24Hours.value = false
+    openTime.value = ''
+    closeTime.value = ''
+  }
+
+  if (toilet.toilet_images && toilet.toilet_images.length > 0) {
+    editPhotoPreview.value = getThumbnailUrl(toilet.toilet_images[0].image_url)
+  } else {
+    editPhotoPreview.value = null
+  }
 }
 
 const closeEditModal = () => {
   editingToiletId.value = null
   editForm.value = {}
+  editPhotoPreview.value = null
+  newImageFile.value = null
+  openTime.value = ''
+  closeTime.value = ''
+  is24Hours.value = false
+
+  if (newImagePreview.value) {
+    URL.revokeObjectURL(newImagePreview.value)
+    newImagePreview.value = null
+  }
 }
 
 const saveEditedToilet = async () => {
@@ -143,6 +191,23 @@ const saveEditedToilet = async () => {
   isSaving.value = true
 
   try {
+    if (newImageFile.value) {
+      await toiletService.updateToiletImage(editingToiletId.value, newImageFile.value)
+    }
+
+    // Формуємо рядок годин роботи перед збереженням
+    if (editForm.value.type === 'public') {
+      if (is24Hours.value) {
+        editForm.value.work_hours = 'Цілодобово'
+      } else if (openTime.value && closeTime.value) {
+        editForm.value.work_hours = `${openTime.value} - ${closeTime.value}`
+      } else {
+        editForm.value.work_hours = ''
+      }
+    } else {
+      editForm.value.work_hours = '' // Для біотуалетів зазвичай пусті години
+    }
+
     const updates = {
       type: editForm.value.type as 'public' | 'bio',
       address: editForm.value.address,
@@ -157,31 +222,14 @@ const saveEditedToilet = async () => {
       moderator_comment: editForm.value.moderator_comment
     }
 
-    // 1. Оновлюємо текстові дані
     await toiletService.updateToiletData(editingToiletId.value, updates)
-
-    let finalImageUrl = editForm.value.toilet_images?.[0]?.image_url
-
-    // 2. Якщо модератор вибрав НОВЕ фото — вантажимо його
-    if (newImageFile.value) {
-      finalImageUrl = await toiletService.updateToiletImage(editingToiletId.value, newImageFile.value)
-    }
-
-    // 3. Оновлюємо локальний список, щоб магія відбулася без перезавантаження
-    const index = pendingToilets.value.findIndex(t => t.id === editingToiletId.value)
-    if (index !== -1) {
-      pendingToilets.value[index] = {
-        ...pendingToilets.value[index],
-        ...updates,
-        toilet_images: finalImageUrl ? [{ image_url: finalImageUrl }] : pendingToilets.value[index].toilet_images
-      } as Toilet
-    }
+    await loadPendingToilets()
 
     toast.success('Зміни успішно збережено!')
     closeEditModal()
   } catch (error: any) {
     toast.error('Помилка при збереженні даних.')
-    console.error(error)
+    console.error('Повна помилка збереження:', error)
   } finally {
     isSaving.value = false
   }
@@ -249,7 +297,7 @@ onMounted(() => {
               <p v-if="toilet.user_comment" class="text-sm text-slate-600 italic mb-3 line-clamp-2">
                 «{{ toilet.user_comment }}»
               </p>
-              <p v-else class="text-sm text-slate-400 italic mb-3">Коментар відсутній</p>
+              <p class="text-sm text-slate-400 italic mb-3" v-else>Коментар відсутній</p>
 
               <div class="flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500 font-medium mt-auto">
                 <span class="flex items-center gap-1.5">
@@ -278,7 +326,6 @@ onMounted(() => {
                 На карті
               </BaseButton>
 
-              <!-- ОНОВЛЕНИЙ БЛОК З КНОПКОЮ РЕДАГУВАННЯ -->
               <div class="flex gap-2 w-full mt-auto">
                 <BaseButton
                     variant="outline"
@@ -310,7 +357,6 @@ onMounted(() => {
             </div>
           </div>
 
-          <!-- РОЗГОРНУТА ЧАСТИНА (ДЕТАЛІ) залишається без змін -->
           <div v-show="expandedCardId === toilet.id" class="border-t border-slate-100 bg-slate-50/50 p-5">
             <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Всі параметри заявки</h4>
             <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-y-4 gap-x-6 text-sm">
@@ -361,111 +407,175 @@ onMounted(() => {
           </div>
         </div>
       </div>
-
     </div>
 
     <!-- 🛠️ МОДАЛЬНЕ ВІКНО РЕДАГУВАННЯ -->
-    <div v-if="editingToiletId" class="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
-      <div class="bg-white w-full max-w-xl rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+    <div v-if="editingToiletId" class="fixed inset-0 z-[60] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-200">
 
-        <div class="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
-          <h2 class="text-lg font-bold text-slate-800">Редагування заявки</h2>
-          <button @click="closeEditModal" class="text-slate-400 hover:text-slate-600 transition-colors">
-            <span class="material-symbols-outlined text-[24px]">close</span>
+        <!-- 1. ШАПКА-ФОТОГРАФІЯ -->
+        <div class="relative w-full h-48 sm:h-56 bg-slate-100 group border-b border-slate-100">
+          <img v-if="newImagePreview || editPhotoPreview"
+               :src="newImagePreview || editPhotoPreview || undefined"
+               class="w-full h-full object-cover"
+               alt="Фото локації" />
+
+          <div v-else class="w-full h-full flex flex-col items-center justify-center text-slate-400">
+            <span class="material-symbols-outlined text-[48px] mb-2 opacity-50">add_a_photo</span>
+            <span class="text-sm font-semibold tracking-wide uppercase">Фото відсутнє</span>
+          </div>
+
+          <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer"
+               @click="fileInput?.click()">
+            <span class="bg-white/20 backdrop-blur-md border border-white/30 text-white font-medium px-4 py-2 rounded-xl flex items-center gap-2 shadow-lg">
+              <span class="material-symbols-outlined text-[20px]">upload</span>
+              {{ (newImagePreview || editForm.toilet_images?.length) ? 'Змінити фотографію' : 'Завантажити фото' }}
+            </span>
+          </div>
+
+          <input type="file" accept="image/*" class="hidden" ref="fileInput" @change="onImageSelected" />
+
+          <button @click="closeEditModal" class="absolute top-4 right-4 w-8 h-8 bg-black/30 hover:bg-black/50 text-white rounded-full flex items-center justify-center backdrop-blur-md transition-colors shadow-sm">
+            <span class="material-symbols-outlined text-[18px]">close</span>
           </button>
         </div>
 
-        <div class="p-6 overflow-y-auto flex flex-col gap-4 text-sm">
-
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="block text-xs font-bold text-slate-500 uppercase mb-1.5">Тип</label>
-              <select v-model="editForm.type" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500">
-                <option value="public">Громадська</option>
-                <option value="bio">Біотуалет</option>
-              </select>
-            </div>
-            <div v-if="editForm.type === 'public'">
-              <label class="block text-xs font-bold text-slate-500 uppercase mb-1.5">Ціна (грн)</label>
-              <input type="number" v-model="editForm.price" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500" />
-            </div>
-          </div>
-
+        <!-- 2. СКРОЛ-ЗОНА З ІНПУТАМИ -->
+        <div class="p-5 overflow-y-auto custom-scrollbar flex flex-col gap-5 bg-white text-sm">
           <div>
-            <label class="block text-xs font-bold text-slate-500 uppercase mb-1.5">Адреса / Орієнтир</label>
-            <input type="text" v-model="editForm.address" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500" />
+            <h2 class="text-lg font-bold text-slate-800">Редагування локації</h2>
+            <p class="text-[11px] font-medium text-slate-500 mt-1">Виправте дані перед публікацією на карту</p>
           </div>
 
-          <div v-if="editForm.type === 'public'">
-            <label class="block text-xs font-bold text-slate-500 uppercase mb-1.5">Години роботи</label>
-            <input type="text" v-model="editForm.work_hours" placeholder="напр. 08:00 - 20:00" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500" />
+          <!-- Перемикач типу вбиральні -->
+          <div class="flex p-1 bg-slate-100 rounded-xl">
+            <button
+                @click="editForm.type = 'public'"
+                :class="['flex-1 py-2 rounded-lg font-medium transition-all', editForm.type === 'public' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500']"
+            >
+              Громадська
+            </button>
+            <button
+                @click="editForm.type = 'bio'"
+                :class="['flex-1 py-2 rounded-lg font-medium transition-all', editForm.type === 'bio' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500']"
+            >
+              Біотуалет
+            </button>
           </div>
 
-          <div v-if="editForm.type === 'public'" class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="block text-xs font-bold text-slate-500 uppercase mb-1.5">Кабінки</label>
-              <input type="number" v-model="editForm.stalls_count" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500" />
-            </div>
-            <div>
-              <label class="block text-xs font-bold text-slate-500 uppercase mb-1.5">Пісуари</label>
-              <input type="number" v-model="editForm.urinals_count" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500" />
-            </div>
-          </div>
-
-          <div class="flex flex-col gap-3 p-4 bg-slate-50 border border-slate-100 rounded-xl mt-2">
-            <label class="flex items-center gap-3 cursor-pointer">
-              <input type="checkbox" v-model="editForm.has_wheelchair_accessible" class="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500">
-              <span class="text-slate-700 font-medium">Доступно для візків</span>
+          <!-- Блок чекбоксів зручностей -->
+          <div class="space-y-3">
+            <label class="flex items-center gap-3 p-3 border-2 border-slate-100 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors select-none">
+              <input type="checkbox" v-model="editForm.has_washbasin" class="w-5 h-5 accent-indigo-600">
+              <span class="text-sm font-medium text-slate-700">Можна помити руки?</span>
             </label>
-            <label class="flex items-center gap-3 cursor-pointer">
-              <input type="checkbox" v-model="editForm.has_washbasin" class="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500">
-              <span class="text-slate-700 font-medium">Є рукомийник</span>
+
+            <label v-if="editForm.type === 'public'" class="flex items-center gap-3 p-3 border-2 border-slate-100 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors select-none">
+              <input type="checkbox" v-model="editForm.has_wheelchair_accessible" class="w-5 h-5 accent-indigo-600">
+              <span class="text-sm font-medium text-slate-700">Облаштовано для людей з інвалідністю?</span>
             </label>
-            <label v-if="editForm.type === 'bio'" class="flex items-center gap-3 cursor-pointer">
-              <input type="checkbox" v-model="editForm.is_lock_broken" class="w-4 h-4 text-red-600 rounded border-slate-300 focus:ring-red-500">
-              <span class="text-slate-700 font-medium text-red-600">Замок зламано</span>
+
+            <label v-if="editForm.type === 'bio'" class="flex items-center gap-3 p-3 border-2 border-red-50 border-dashed rounded-xl cursor-pointer hover:bg-red-50/50 transition-colors select-none">
+              <input type="checkbox" v-model="editForm.is_lock_broken" class="w-5 h-5 accent-red-500">
+              <span class="text-sm font-medium text-slate-700 text-red-600">Зламани замок?</span>
             </label>
           </div>
 
-          <div>
-            <label class="block text-xs font-bold text-slate-500 uppercase mb-1.5">Коментар користувача</label>
-            <textarea v-model="editForm.user_comment" rows="2" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 resize-none"></textarea>
+          <!-- Специфічні поля для громадського типу -->
+          <div v-if="editForm.type === 'public'" class="flex flex-col gap-4 animate-fade-in">
+            <div class="flex flex-col gap-1">
+              <span class="text-[10px] uppercase font-bold text-slate-400 ml-1">Ціна (грн)</span>
+              <input type="number" v-model.number="editForm.price" class="p-3 bg-slate-50 rounded-xl text-sm focus:outline-indigo-600 transition-colors">
+            </div>
+
+            <!-- ВСТАВЛЕНО СТИЛЬ ГОДИН РОБОТИ З ОРИГІНАЛУ -->
+            <div class="flex flex-col gap-1">
+              <span class="text-[10px] uppercase font-bold text-slate-400 ml-1">Години роботи</span>
+              <div class="flex items-center gap-2">
+                <input type="time" v-model="openTime" :disabled="is24Hours" class="w-full p-3 bg-slate-50 rounded-xl text-sm focus:outline-indigo-600 transition-colors disabled:opacity-50">
+                <span class="text-slate-400 font-bold">—</span>
+                <input type="time" v-model="closeTime" :disabled="is24Hours" class="w-full p-3 bg-slate-50 rounded-xl text-sm focus:outline-indigo-600 transition-colors disabled:opacity-50">
+              </div>
+              <label class="flex items-center gap-2 mt-1.5 ml-1 cursor-pointer select-none">
+                <input type="checkbox" v-model="is24Hours" class="w-4 h-4 rounded text-indigo-600 border-slate-300 focus:ring-indigo-500">
+                <span class="text-xs font-medium text-slate-600">Цілодобово</span>
+              </label>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+              <div class="flex flex-col gap-2">
+                <span class="text-[10px] uppercase font-bold text-slate-400 ml-1">Кількість кабінок</span>
+                <div class="flex items-center bg-slate-50 rounded-xl px-3 py-1 border-2 border-transparent focus-within:border-indigo-600 transition-colors">
+                  <span class="material-symbols-outlined text-slate-400 text-[20px] mr-2">door_front</span>
+                  <input type="number" v-model.number="editForm.stalls_count" min="0" class="w-full bg-transparent p-2 text-sm focus:outline-none" />
+                </div>
+              </div>
+
+              <div class="flex flex-col gap-2">
+                <span class="text-[10px] uppercase font-bold text-slate-400 ml-1">Кількість пісуарів</span>
+                <div class="flex items-center bg-slate-50 rounded-xl px-3 py-1 border-2 border-transparent focus-within:border-indigo-600 transition-colors">
+                  <span class="material-symbols-outlined text-slate-400 text-[20px] mr-2">man</span>
+                  <input type="number" v-model.number="editForm.urinals_count" min="0" class="w-full bg-transparent p-2 text-sm focus:outline-none" />
+                </div>
+              </div>
+            </div>
           </div>
 
-          <div>
-            <label class="block text-xs font-bold text-indigo-500 uppercase mb-1.5">Нотатка модератора (внутрішня)</label>
-            <textarea v-model="editForm.moderator_comment" rows="2" placeholder="Напишіть, що ви змінили..." class="w-full px-3 py-2 bg-indigo-50 border border-indigo-100 rounded-lg focus:outline-none focus:border-indigo-300 resize-none"></textarea>
+          <!-- Адреса / Орієнтир -->
+          <div class="flex flex-col gap-1">
+            <span class="text-[10px] uppercase font-bold text-slate-400 ml-1">Адреса / Орієнтир</span>
+            <input type="text" v-model="editForm.address" class="p-3 bg-slate-50 rounded-xl text-sm focus:outline-indigo-600 transition-colors" />
           </div>
 
+          <!-- Коментар користувача -->
+          <div class="flex flex-col gap-2">
+            <span class="text-[10px] uppercase font-bold text-slate-400 ml-1">Коментар користувача</span>
+            <textarea
+                v-model="editForm.user_comment"
+                rows="2"
+                class="p-3 bg-slate-50 rounded-xl text-sm focus:outline-indigo-600 resize-none transition-colors"
+            ></textarea>
+          </div>
+
+          <!-- Нотатка модератора -->
+          <div class="flex flex-col gap-2">
+            <span class="text-[10px] uppercase font-bold text-indigo-500 ml-1">Нотатка модератора (внутрішня)</span>
+            <textarea
+                v-model="editForm.moderator_comment"
+                placeholder="Напишіть, що ви змінили..."
+                rows="2"
+                class="p-3 bg-indigo-50/50 rounded-xl text-sm focus:outline-indigo-600 resize-none transition-colors"
+            ></textarea>
+          </div>
         </div>
 
-        <!-- БЛОК ЗАМІНИ ФОТО -->
-        <div class="mb-2 p-4 bg-slate-50 border border-slate-100 rounded-xl flex items-center gap-4">
-          <div class="w-16 h-16 shrink-0 rounded-lg overflow-hidden bg-white border border-slate-200 flex items-center justify-center">
-            <img v-if="newImagePreview" :src="newImagePreview" class="w-full h-full object-cover" alt="Нове прев'ю" />
-            <img v-else-if="editForm.toilet_images?.length" :src="getThumbnailUrl(editForm.toilet_images[0].image_url)" class="w-full h-full object-cover" alt="Поточне фото" />
-            <span v-else class="material-symbols-outlined text-slate-300">no_photography</span>
-          </div>
-
-          <div class="flex flex-col items-start gap-1">
-            <label class="text-xs font-bold text-slate-600 uppercase">Фотографія локації</label>
-            <input type="file" accept="image/*" class="hidden" ref="fileInput" @change="onImageSelected" />
-            <BaseButton variant="outline" class="py-1.5! px-3! text-xs!" @click="fileInput?.click()">
-              <span class="material-symbols-outlined text-[14px]">upload</span>
-              {{ editForm.toilet_images?.length ? 'Завантажити інше' : 'Додати фото' }}
-            </BaseButton>
-          </div>
-        </div>
-        <div class="p-5 border-t border-slate-100 bg-white flex justify-end gap-3">
-          <BaseButton variant="outline" @click="closeEditModal" class="py-2! px-4!">
+        <!-- 3. ФУТЕР З КНОПКАМИ -->
+        <div class="p-4 border-t border-slate-100 bg-slate-50 flex flex-col gap-2 shrink-0">
+          <BaseButton
+              variant="primary"
+              @click="saveEditedToilet"
+              :disabled="isSaving || isCompressing"
+          >
+            <span v-if="isSaving || isCompressing" class="material-symbols-outlined text-[20px] animate-spin mr-1">sync</span>
+            {{ isSaving ? 'Збереження...' : isCompressing ? 'Обробка photo...' : 'Зберегти зміни' }}
+          </BaseButton>
+          <BaseButton variant="ghost" @click="closeEditModal" :disabled="isSaving">
             Скасувати
           </BaseButton>
-          <BaseButton variant="primary" @click="saveEditedToilet" :disabled="isSaving" class="py-2! px-6!">
-            {{ isSaving ? 'Збереження...' : 'Зберегти зміни' }}
-          </BaseButton>
         </div>
+
       </div>
     </div>
 
   </div>
 </template>
+
+<style scoped>
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 10px;
+}
+</style>

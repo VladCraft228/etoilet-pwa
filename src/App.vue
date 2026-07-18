@@ -47,6 +47,7 @@ const showRouteChoiceModal = ref(false)
 const isAddressSearchOpen = ref(false)
 const isAddFormOpen = ref(false)
 
+
 // --- СТАН МАПИ ---
 const isFollowUserActive = ref(false)
 const isManualSelectionMode = ref(false)
@@ -447,7 +448,7 @@ onUnmounted(() => {
   <main class="relative w-screen h-dvh overflow-hidden bg-slate-100 font-sans">
 
     <!-- 📌 СИСТЕМНИЙ ХЕДЕР НАВІГАЦІЇ (Завжди зверху) -->
-    <div class="absolute top-4 left-4 z-100 flex gap-2 pointer-events-auto">
+    <div class="absolute top-4 left-4 z-100 flex gap-2 pointer-events-auto transition-all duration-150 [body:has(.animate-in)_&]:opacity-0 [body:has(.animate-in)_&]:pointer-events-none [body:has(.animate-in)_&]:scale-95">
       <button
           v-if="currentScreen !== 'map'"
           @click="navigateTo('map')"
