@@ -1,40 +1,30 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { getThumbnailUrl } from "../utils/imageUtils.ts";
+import type { Toilet } from "../../types.ts";
 
-// Тіпізуємо структуру для безпеки коду та автокомпліту
-interface ToiletImage {
-  image_url: string;
-}
-
-interface Toilet {
-  id: string;
-  type: 'public' | 'bio';
-  price: number;
-  work_hours?: string;
-  stalls_count?: number;
-  urinals_count?: number;
-  user_comment?: string;
-  has_wheelchair_accessible?: boolean;
-  has_washbasin?: boolean;
-  is_lock_broken?: boolean;
-  toilet_images?: ToiletImage[];
-}
-
-defineProps<{
-  toilet: Toilet
-}>()
+const props = defineProps<{
+  toilet: Toilet;
+  isAdmin?: boolean;
+}>();
 
 const emit = defineEmits<{
-  (e: 'build-route', toilet: Toilet): void
-}>()
+  (e: 'build-route', toilet: Toilet): void;
+  (e: 'edit', toilet: Toilet): void;
+  (e: 'move', toilet: Toilet): void;
+  (e: 'delete', toiletId: string): void;
+}>();
+
+const title = computed(() =>
+    props.toilet.type === 'public' ? 'Громадська вбиральня' : 'Біотуалет'
+);
 </script>
 
 <template>
-  <!-- overflow-hidden на батьку, щоб картинка ідеально скруглялася по кутах попапу -->
-  <div class="flex flex-col min-w-50 font-sans bg-white overflow-hidden rounded-xl">
+  <div class="flex flex-col w-65 sm:w-70 font-sans bg-white overflow-hidden rounded-xl">
 
     <!-- Блок фото -->
-    <div v-if="toilet.toilet_images && toilet.toilet_images.length > 0" class="w-full h-40 overflow-hidden bg-slate-100">
+    <div v-if="toilet.toilet_images?.length" class="w-full h-40 overflow-hidden bg-slate-100">
       <img
           :src="getThumbnailUrl(toilet.toilet_images[0].image_url)"
           loading="lazy"
@@ -44,82 +34,161 @@ const emit = defineEmits<{
       />
     </div>
 
-    <!-- Контентна частина: збільшено падінг для кращого сприйняття -->
-    <div class="p-3 flex flex-col gap-2">
-      <div>
-        <h3 class="font-bold text-slate-900 text-base leading-tight">
-          {{ toilet.type === 'public' ? 'Громадська вбиральня' : 'Біотуалет' }}
-        </h3>
+    <!-- Контентна частина -->
+    <div class="p-3 flex flex-col gap-2.5">
+      <h3 class="font-bold text-slate-900 text-base leading-tight mb-0.5">
+        {{ title }}
+      </h3>
 
-        <!-- Ціна тепер доступна для всіх типів, якщо вона вказана -->
-        <p v-if="toilet.price === 0" class="text-emerald-600 font-bold text-xs mt-0.5">Безкоштовно</p>
-        <p v-else class="font-semibold text-slate-700 text-xs mt-0.5">Ціна: {{ toilet.price }} грн</p>
-      </div>
+      <!-- Головна інфо-стрічка: ціна та години роботи -->
+      <div v-if="toilet.price !== undefined || toilet.work_hours" class="flex gap-1.5 text-xs w-full">
 
-      <!-- Додаткова інформація для public -->
-      <div v-if="toilet.type === 'public' || toilet.work_hours || toilet.stalls_count" class="text-xs text-slate-600">
-        <div class="flex flex-wrap items-center justify-between gap-2 w-full">
-          <p v-if="toilet.work_hours" class="flex items-center gap-1 text-slate-500 font-medium">
-            <span class="material-symbols-outlined text-[14px]">schedule</span>
-            {{ toilet.work_hours }}
-          </p>
-
-          <div class="flex items-center gap-2 text-slate-500 bg-slate-50 px-2 py-0.5 rounded-md border border-slate-100" :class="{ 'ml-auto': !toilet.work_hours }">
-            <span class="flex items-center gap-0.5" title="Кабінки">
-              <span class="material-symbols-outlined text-[14px]">door_front</span>
-              <b class="text-slate-700">{{ toilet.stalls_count || 1 }}</b>
-            </span>
-            <span v-if="toilet.urinals_count && toilet.urinals_count > 0" class="flex items-center gap-0.5" title="Пісуари">
-              <span class="material-symbols-outlined text-[14px]">man</span>
-              <b class="text-slate-700">{{ toilet.urinals_count }}</b>
-            </span>
+        <!-- Ціна -->
+        <div class="flex-1 w-1/2 min-w-0 flex items-center gap-1 p-1.5 bg-emerald-50/80 border border-emerald-100 rounded-lg">
+          <span class="material-symbols-outlined text-[18px] text-emerald-600 shrink-0">payments</span>
+          <div class="flex flex-col min-w-0">
+            <span class="text-[9px] text-emerald-700/80 font-medium leading-tight">Вартість</span>
+            <span class="font-bold text-emerald-950 text-[10px] sm:text-xs leading-tight wrap-break-word">
+    {{ toilet.price === 0 ? 'Безкоштовно' : `${toilet.price} грн` }}
+  </span>
           </div>
         </div>
+
+        <!-- Час роботи -->
+        <div v-if="toilet.work_hours" class="flex-1 w-1/2 min-w-0 flex items-center gap-1 p-1.5 bg-slate-50 border border-slate-100 rounded-lg">
+          <span class="material-symbols-outlined text-[18px] text-slate-500 shrink-0">schedule</span>
+          <div class="flex flex-col min-w-0">
+            <span class="text-[9px] text-slate-400 font-medium leading-tight">Час роботи</span>
+            <span class="font-bold text-slate-800 text-[10px] sm:text-xs leading-tight wrap-break-word">
+    {{ toilet.work_hours }}
+  </span>
+          </div>
+        </div>
+
       </div>
 
-      <!-- Коментар для біотуалетів -->
-      <p v-if="toilet.type === 'bio' && toilet.user_comment" class="text-xs text-slate-500 italic bg-slate-50 p-2 rounded-lg border border-dashed border-slate-200">
-        «{{ toilet.user_comment }}»
-      </p>
-
-      <!-- Теги зручностей -->
-      <div class="flex flex-wrap gap-1 mt-0.5">
-        <span v-if="toilet.has_wheelchair_accessible" class="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-md border border-emerald-100">
-          <span class="material-symbols-outlined text-[12px]">accessible</span>
-          Доступно для візків
-        </span>
-        <span v-else class="inline-flex items-center gap-1 bg-slate-50 text-slate-400 text-[10px] font-medium px-2 py-0.5 rounded-md border border-slate-100">
-          <span class="material-symbols-outlined text-[12px]">not_accessible</span>
-          Не облаштовано
+      <!-- Кабінки/пісуари -->
+      <div
+          v-if="toilet.stalls_count || toilet.urinals_count"
+          class="flex items-center gap-2 p-1.5 bg-slate-50 border border-slate-100 rounded-lg text-slate-600 text-xs"
+      >
+        <span class="flex items-center gap-1 shrink-0" title="Кабінки">
+          <span class="material-symbols-outlined text-[16px] text-slate-500">door_front</span>
+          <b class="text-slate-800 font-semibold">{{ toilet.stalls_count || 1 }}</b>
+          <span class="text-slate-400 font-medium">кабін.</span>
         </span>
 
-        <span v-if="toilet.has_washbasin" class="inline-flex items-center gap-1 bg-blue-50 text-blue-600 text-[10px] font-bold px-2 py-0.5 rounded-md border border-blue-100">
-          <span class="material-symbols-outlined text-[12px]">soap</span>
-          Рукомийник
+        <span
+            v-if="toilet.urinals_count && toilet.urinals_count > 0"
+            class="flex items-center gap-1 border-l border-slate-200 pl-2 shrink-0"
+            title="Пісуари"
+        >
+          <span class="material-symbols-outlined text-[16px] text-slate-500">man</span>
+          <b class="text-slate-800 font-semibold">{{ toilet.urinals_count }}</b>
+          <span class="text-slate-400 font-medium">пісуар.</span>
+        </span>
+      </div>
+
+      <!-- Зручності: іконка + короткий текстовий підпис -->
+      <div
+          v-if="toilet.has_wheelchair_accessible !== undefined || toilet.has_washbasin || toilet.type === 'bio'"
+          class="flex flex-wrap gap-1.5 w-full"
+      >
+        <!-- Візок -->
+        <span
+            v-if="toilet.has_wheelchair_accessible"
+            title="Доступно для візків"
+            class="flex-1 min-w-[45%] flex items-center justify-center gap-1 h-8 rounded-md bg-emerald-50 border border-emerald-100 text-emerald-700 text-[10px] font-semibold"
+        >
+          <span class="material-symbols-outlined text-[14px]">accessible</span>
+          Візок
+        </span>
+        <span
+            v-else
+            title="Не облаштовано для візків"
+            class="flex-1 min-w-[45%] flex items-center justify-center gap-1 h-8 rounded-md bg-slate-50 border border-slate-100 text-slate-400 text-[10px] font-medium"
+        >
+          <span class="material-symbols-outlined text-[14px]">not_accessible</span>
+          Без візка
         </span>
 
-        <!-- Специфічні теги для біотуалетів -->
+        <!-- Рукомийник -->
+        <span
+            v-if="toilet.has_washbasin"
+            title="Є рукомийник"
+            class="flex-1 min-w-[45%] flex items-center justify-center gap-1 h-8 rounded-md bg-blue-50 border border-blue-100 text-blue-600 text-[10px] font-semibold"
+        >
+          <span class="material-symbols-outlined text-[14px]">soap</span>
+          Умивальник
+        </span>
+
+        <!-- Замок (для біотуалетів) -->
         <template v-if="toilet.type === 'bio'">
-          <span v-if="!toilet.is_lock_broken" class="inline-flex items-center gap-1 bg-indigo-50 text-indigo-600 text-[10px] font-bold px-2 py-0.5 rounded-md border border-indigo-100">
-            <span class="material-symbols-outlined text-[12px]">lock</span>
+          <span
+              v-if="!toilet.is_lock_broken"
+              title="Замок працює"
+              class="flex-1 min-w-[45%] flex items-center justify-center gap-1 h-8 rounded-md bg-indigo-50 border border-indigo-100 text-indigo-600 text-[10px] font-semibold"
+          >
+            <span class="material-symbols-outlined text-[14px]">lock</span>
             Є замок
           </span>
-          <span v-else class="inline-flex items-center gap-1 bg-red-50 text-red-600 text-[10px] font-bold px-2 py-0.5 rounded-md border border-red-100">
-            <span class="material-symbols-outlined text-[12px]">lock_open</span>
-            Замок зламано
+          <span
+              v-else
+              title="Замок зламано"
+              class="flex-1 min-w-[45%] flex items-center justify-center gap-1 h-8 rounded-md bg-red-50 border border-red-100 text-red-600 text-[10px] font-semibold"
+          >
+            <span class="material-symbols-outlined text-[14px]">lock_open</span>
+            Зламано
           </span>
         </template>
       </div>
 
-      <!-- Кнопка (Прибрано дублюючий обгортковий div) -->
+      <!-- Коментар для біотуалетів -->
+      <p
+          v-if="toilet.type === 'bio' && toilet.user_comment"
+          class="text-xs text-slate-600 italic bg-slate-50 p-2 rounded-lg border border-dashed border-slate-200"
+      >
+        «{{ toilet.user_comment }}»
+      </p>
+
+      <!-- Кнопка маршруту -->
       <button
           @click="emit('build-route', toilet)"
-          class="mt-1 w-full flex items-center justify-center gap-1.5 bg-indigo-600 text-white text-xs font-bold py-2 rounded-lg hover:bg-indigo-700 active:scale-[0.98] transition-all shadow-sm cursor-pointer"
+          class="w-full flex items-center justify-center gap-1.5 bg-indigo-600 text-white text-xs font-bold py-2 rounded-lg hover:bg-indigo-700 active:scale-[0.98] transition-all shadow-sm cursor-pointer"
       >
         <span class="material-symbols-outlined text-[16px]">directions_walk</span>
         Маршрут сюди
       </button>
-    </div>
 
+      <!-- Адмін-панель -->
+      <div v-if="isAdmin" class="pt-2 border-t border-slate-200/60">
+        <span class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+          Керування
+        </span>
+        <div class="flex gap-1.5">
+          <button
+              @click="emit('edit', toilet)"
+              class="flex-1 flex items-center justify-center py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl transition-colors cursor-pointer"
+              title="Редагувати"
+          >
+            <span class="material-symbols-outlined text-[16px]">edit</span>
+          </button>
+          <button
+              @click="emit('move', toilet)"
+              class="flex-1 flex items-center justify-center py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-xl transition-colors cursor-pointer"
+              title="Перемістити"
+          >
+            <span class="material-symbols-outlined text-[16px]">distance</span>
+          </button>
+          <button
+              @click="emit('delete', toilet.id)"
+              class="flex-[0.5] flex items-center justify-center py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl transition-colors cursor-pointer"
+              title="Видалити"
+          >
+            <span class="material-symbols-outlined text-[16px]">delete</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>

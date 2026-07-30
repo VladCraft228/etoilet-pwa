@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, defineAsyncComponent, onUnmounted, nextTick } from 'vue'
+import { ref, watch, onMounted, defineAsyncComponent, nextTick } from 'vue'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
@@ -8,10 +8,12 @@ import { toiletService } from './services/toiletService'
 import { useGeolocation } from './composables/useGeolocation'
 import { useRouting } from './composables/useRouting'
 import { useMap } from './composables/useMap'
+import { useAuth } from './composables/useAuth'
+import { useRealtimeToilets } from './composables/useRealtimeToilets'
 import { useToast } from "vue-toastification"
-import { supabase } from "./supabase"
 
 // --- БАЗОВІ КОМПОНЕНТИ ---
+import AppNavigation from './components/ui/AppNavigation.vue'
 import MapControls from './components/map/MapControls.vue'
 import ToiletTargetingOverlay from "./components/map/ToiletTargetingOverlay.vue"
 import UserTargetingOverlay from "./components/map/UserTargetingOverlay.vue"
@@ -19,6 +21,9 @@ import RouteInfoBanner from "./components/map/RouteInfoBanner.vue"
 import ToiletPopupCard from "./components/map/ToiletPopupCard.vue"
 import AdminView from "./components/views/AdminView.vue"
 import LoginView from "./components/views/LoginView.vue"
+import EditToiletModal from "./components/features/EditToiletModal.vue"
+import RelocateOverlay from "./components/map/RelocateOverlay.vue"
+import type { Toilet } from "./types.ts"
 
 // --- ЛІНИВІ КОМПОНЕНТИ ---
 const LocationPrompt = defineAsyncComponent(() => import('./components/features/LocationPrompt.vue'))
@@ -27,18 +32,17 @@ const AddressSearchModal = defineAsyncComponent(() => import('./components/featu
 const WelcomeModal = defineAsyncComponent(() => import('./components/features/WelcomeModal.vue'))
 const RouteChoiceModal = defineAsyncComponent(() => import('./components/features/RouteChoiceModal.vue'))
 
-// --- ІНІЦІАЛІЗАЦІЯ ХУКІВ ---
-const { userLocation, isLocating, startTrackingLocation, stopTrackingLocation } = useGeolocation()
-const { activeRouteCoords, routeInfo, buildRoute, clearRoute } = useRouting()
-const { map, temporaryClickedCoords, initMap, flyToCoords, fitRouteBounds, updateToiletsClustered } = useMap()
-const toast = useToast()
-
 // --- СТАН ДОДАТКУ ---
 const currentScreen = ref<'map' | 'login' | 'admin'>('map')
-const isAdmin = ref(false)
-const hasNewData = ref(false)
-const approvedToilets = ref<any[]>([])
 const adminFocusToiletId = ref<string | null>(null)
+
+// --- ІНІЦІАЛІЗАЦІЯ ХУКІВ ---
+const { isAdmin, initAuth, handleLogout } = useAuth()
+const { approvedToilets, hasNewData, refreshMapData, initRealtime, loadToiletsData } = useRealtimeToilets()
+const { userLocation, isLocating, startTrackingLocation, stopTrackingLocation } = useGeolocation()
+const { activeRouteCoords, routeInfo, buildRoute, clearRoute } = useRouting()
+const { map, center, temporaryClickedCoords, initMap, flyToCoords, fitRouteBounds, updateToiletsClustered } = useMap()
+const toast = useToast()
 
 // --- СТАН UI ТА МОДАЛОК ---
 const showWelcomeModal = ref(false)
@@ -46,7 +50,8 @@ const showLocationPrompt = ref(false)
 const showRouteChoiceModal = ref(false)
 const isAddressSearchOpen = ref(false)
 const isAddFormOpen = ref(false)
-
+const isEditModalOpen = ref(false)
+const toiletToEdit = ref<Toilet | null>(null)
 
 // --- СТАН МАПИ ---
 const isFollowUserActive = ref(false)
@@ -57,27 +62,18 @@ const addressSearchContext = ref<'user' | 'toilet'>('user')
 const targetToiletForRoute = ref<any>(null)
 
 // --- МАРКЕРИ ТА ПОПАПИ ---
+const isRelocatingMode = ref(false)
+const relocatingToiletId = ref<string | null>(null)
 let userLocationMarker: maplibregl.Marker | null = null
 const popupContentRef = ref<HTMLElement | null>(null)
 const activeToiletForPopup = ref<any>(null)
 let activeMapPopup: maplibregl.Popup | null = null
-let toiletsChannel: any = null
 let pendingReviewMarker: maplibregl.Marker | null = null
 
 
 // ==========================================
-// 🔐 АВТОРИЗАЦІЯ ТА НАВІГАЦІЯ
+// 🔐 НАВІГАЦІЯ
 // ==========================================
-const checkAdminRole = async (userId: string) => {
-  try {
-    const { data: profile } = await supabase.from('profiles').select('role').eq('id', userId).single()
-    isAdmin.value = profile?.role === 'admin'
-  } catch (err) {
-    console.error('Помилка перевірки ролі:', err)
-    isAdmin.value = false
-  }
-}
-
 const navigateTo = (screen: 'map' | 'login' | 'admin') => {
   if (screen === 'map') adminFocusToiletId.value = null // Скидаємо фокус
   if (screen === 'admin' && !isAdmin.value) {
@@ -87,53 +83,9 @@ const navigateTo = (screen: 'map' | 'login' | 'admin') => {
   currentScreen.value = screen
 }
 
-const handleLogout = async () => {
-  await supabase.auth.signOut()
-  isAdmin.value = false
-  currentScreen.value = 'map'
+const onLogout = () => {
+  handleLogout(currentScreen)
 }
-
-
-// ==========================================
-// 🌍 ДАНІ МАПИ ТА REALTIME
-// ==========================================
-const loadToiletsData = async () => {
-  try {
-    const data = await toiletService.fetchApprovedToilets()
-    if (data) approvedToilets.value = data
-  } catch (error) {
-    console.error('Помилка завантаження точок:', error)
-  }
-}
-
-const refreshMapData = async () => {
-  toast.info('Оновлюємо карту...', { timeout: 1500 })
-  await loadToiletsData()
-  hasNewData.value = false
-  toast.success('Карта успішно оновлена!')
-}
-
-const subscribeToToiletsRealtime = () => {
-  if (toiletsChannel) supabase.removeChannel(toiletsChannel)
-
-  toiletsChannel = supabase
-      .channel('public:toilets')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'toilets' }, (payload) => {
-        let shouldAlert = false
-        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-          const newData = payload.new as { status?: string } | null
-          if (newData && newData.status === 'approved') shouldAlert = true
-        }
-        if (payload.eventType === 'DELETE') shouldAlert = true
-
-        if (shouldAlert && !hasNewData.value) {
-          hasNewData.value = true
-          toast.warning('Карту було оновлено іншим користувачем! Оновіть сторінку.')
-        }
-      })
-      .subscribe()
-}
-
 
 // ==========================================
 // 🎯 ОБРОБНИКИ ДІЙ UI
@@ -290,20 +242,15 @@ const handleTeleportFromAdmin = async (id: string, lat: number, lng: number) => 
         <div class="absolute bottom-1 left-1/2 -translate-x-1/2 w-5 h-1.5 bg-black/40 rounded-[100%] blur-[1px]"></div>
       `
 
-      // РОЗШИРЕНИЙ ПОПАП З ДВОМА КНОПКАМИ
       const popupNode = document.createElement('div')
       popupNode.className = 'p-3 flex flex-col items-center min-w-[220px] font-sans gap-2'
       popupNode.innerHTML = `
         <span class="text-[10px] font-bold text-amber-600 bg-amber-50 px-2.5 py-1 rounded-md border border-amber-100 uppercase tracking-wider mb-1">На перевірці</span>
-
         <button id="route-btn" class="w-full flex items-center justify-center gap-1.5 bg-indigo-600 text-white text-xs font-bold py-2 rounded-lg hover:bg-indigo-700 active:scale-95 transition-all shadow-sm">
-          <span class="material-symbols-outlined text-[16px]">directions_walk</span>
-          Маршрут сюди
+          <span class="material-symbols-outlined text-[16px]">directions_walk</span> Маршрут сюди
         </button>
-
         <button id="return-admin-btn" class="w-full flex items-center justify-center gap-1.5 bg-slate-100 text-slate-700 text-xs font-bold py-2 rounded-lg hover:bg-slate-200 active:scale-95 transition-all border border-slate-200">
-          <span class="material-symbols-outlined text-[16px]">admin_panel_settings</span>
-          Повернутися до заявки
+          <span class="material-symbols-outlined text-[16px]">admin_panel_settings</span> Повернутися до заявки
         </button>
       `
 
@@ -313,18 +260,13 @@ const handleTeleportFromAdmin = async (id: string, lat: number, lng: number) => 
         showRouteChoiceModal.value = true
       })
 
-      // Обробник нової кнопки повернення
       const btnReturn = popupNode.querySelector('#return-admin-btn')
       btnReturn?.addEventListener('click', () => {
-        adminFocusToiletId.value = id // Запам'ятовуємо ID
-        currentScreen.value = 'admin' // Відкриваємо адмінку
+        adminFocusToiletId.value = id
+        currentScreen.value = 'admin'
       })
 
-      const popup = new maplibregl.Popup({
-        closeButton: true,
-        closeOnClick: true,
-        offset: 45
-      }).setDOMContent(popupNode)
+      const popup = new maplibregl.Popup({ closeButton: true, closeOnClick: true, offset: 45 }).setDOMContent(popupNode)
 
       pendingReviewMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
           .setLngLat([lng, lat])
@@ -337,6 +279,62 @@ const handleTeleportFromAdmin = async (id: string, lat: number, lng: number) => 
   }, 50)
 }
 
+// ==========================================
+// 🛠️ АДМІН-ДІЇ НА мапІ
+// ==========================================
+const handleAdminEdit = (toilet: Toilet) => {
+  activeToiletForPopup.value = null
+  if (activeMapPopup) activeMapPopup.remove()
+  toiletToEdit.value = toilet
+  isEditModalOpen.value = true
+}
+
+const handleAdminDelete = async (toiletId: string) => {
+  if (!confirm('Ви впевнені, що хочете видалити цей туалет назавжди?')) return
+  try {
+    await toiletService.deleteToilet(toiletId, [])
+    activeToiletForPopup.value = null
+    await refreshMapData()
+    toast.success('Локацію успішно видалено')
+  } catch (error) {
+    console.error(error)
+    toast.error('Помилка при видаленні')
+  }
+}
+
+const handleMapEditSaved = () => {
+  isEditModalOpen.value = false
+  refreshMapData()
+}
+
+const handleAdminMove = (toilet: Toilet) => {
+  if (!toilet.longitude || !toilet.latitude) return
+  activeToiletForPopup.value = null
+  if (activeMapPopup) activeMapPopup.remove()
+  isRelocatingMode.value = true
+  relocatingToiletId.value = toilet.id
+  flyToCoords(toilet.longitude, toilet.latitude, 17)
+}
+
+const confirmRelocating = async () => {
+  if (!relocatingToiletId.value) return
+  const [lng, lat] = center.value // Беремо поточний центр мапи
+
+  try {
+    await toiletService.updateToiletCoordinates(relocatingToiletId.value, lat, lng)
+    toast.success('Локацію успішно оновлено')
+    await refreshMapData()
+  } catch (error) {
+    toast.error('Помилка при збереженні нових координат')
+  } finally {
+    cancelRelocating()
+  }
+}
+
+const cancelRelocating = () => {
+  isRelocatingMode.value = false
+  relocatingToiletId.value = null
+}
 
 // ==========================================
 // 🔄 WATCHERS ТА ЖИТТЄВИЙ ЦИКЛ
@@ -387,13 +385,11 @@ watch(activeRouteCoords, (coords) => {
   }
 })
 
-// Відновлення мапи після закриття адмінки/логіну
 watch(currentScreen, async (newScreen) => {
   if (newScreen === 'map') {
     await nextTick()
     setTimeout(() => { if (map.value) map.value.resize() }, 50)
   } else {
-    // Якщо ми пішли з карти (в адмінку чи кудись ще) – прибираємо тимчасовий маркер
     if (pendingReviewMarker) {
       pendingReviewMarker.remove()
       pendingReviewMarker = null
@@ -404,22 +400,8 @@ watch(currentScreen, async (newScreen) => {
 onMounted(async () => {
   if (localStorage.getItem('hideAlphaWelcome') !== 'true') showWelcomeModal.value = true
 
-  const { data: { session } } = await supabase.auth.getSession()
-  if (session) await checkAdminRole(session.user.id)
-
-  supabase.auth.onAuthStateChange(async (_event, session) => {
-    if (session) {
-      await checkAdminRole(session.user.id)
-      if (isAdmin.value && currentScreen.value === 'login') currentScreen.value = 'admin'
-      else if (!isAdmin.value && currentScreen.value === 'login') {
-        toast.error('У вас немає прав доступу.')
-        await supabase.auth.signOut()
-      }
-    } else {
-      isAdmin.value = false
-      if (currentScreen.value === 'admin') currentScreen.value = 'map'
-    }
-  })
+  // Ініціалізуємо слухачів авторизації (перевірка адміна)
+  await initAuth(currentScreen)
 
   const mapInstance = initMap('main-map', () => {
     if (isFollowUserActive.value) {
@@ -435,43 +417,22 @@ onMounted(async () => {
     }
   })
 
+  // Ініціалізуємо слухачів БД і підтягуємо дані
   await loadToiletsData()
-  subscribeToToiletsRealtime()
-})
-
-onUnmounted(() => {
-  if (toiletsChannel) supabase.removeChannel(toiletsChannel)
+  initRealtime()
 })
 </script>
 
 <template>
   <main class="relative w-screen h-dvh overflow-hidden bg-slate-100 font-sans">
 
-    <!-- 📌 СИСТЕМНИЙ ХЕДЕР НАВІГАЦІЇ (Завжди зверху) -->
-    <div class="absolute top-4 left-4 z-100 flex gap-2 pointer-events-auto transition-all duration-150 [body:has(.animate-in)_&]:opacity-0 [body:has(.animate-in)_&]:pointer-events-none [body:has(.animate-in)_&]:scale-95">
-      <button
-          v-if="currentScreen !== 'map'"
-          @click="navigateTo('map')"
-          class="flex items-center gap-1.5 px-3 py-2 bg-white text-slate-800 text-xs font-bold rounded-xl shadow-md border border-slate-100 hover:bg-slate-50 active:scale-95 transition-all cursor-pointer"
-      >
-        <span class="material-symbols-outlined text-[16px]">map</span> На карту
-      </button>
-      <button
-          v-if="currentScreen === 'map'"
-          @click="navigateTo('admin')"
-          class="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl shadow-md hover:bg-indigo-700 active:scale-95 transition-all cursor-pointer"
-      >
-        <span class="material-symbols-outlined text-[16px]">admin_panel_settings</span>
-        {{ isAdmin ? 'Адмінка' : 'Вхід для адміна' }}
-      </button>
-      <button
-          v-if="isAdmin && currentScreen !== 'map'"
-          @click="handleLogout"
-          class="flex items-center gap-1.5 px-3 py-2 bg-red-50 text-red-600 text-xs font-bold rounded-xl shadow-md border border-red-100 hover:bg-red-100 active:scale-95 transition-all cursor-pointer"
-      >
-        <span class="material-symbols-outlined text-[16px]">logout</span> Вийти
-      </button>
-    </div>
+    <!-- 📌 СИСТЕМНИЙ ХЕДЕР НАВІГАЦІЇ -->
+    <AppNavigation
+        :current-screen="currentScreen"
+        :is-admin="isAdmin"
+        @navigate="navigateTo"
+        @logout="onLogout"
+    />
 
     <!-- 🌍 БЛОК МАПИ (Завжди в DOM, ховається через v-show) -->
     <div v-show="currentScreen === 'map'" class="absolute inset-0 w-full h-full">
@@ -487,6 +448,14 @@ onUnmounted(() => {
       <RouteChoiceModal :is-open="showRouteChoiceModal" @use-google="handleGoogleRoute" @use-internal="handleInternalRoute" @close="showRouteChoiceModal = false" />
       <RouteInfoBanner :info="routeInfo" @close="clearRoute(); targetToiletForRoute = null" />
 
+      <!-- Модальне вікно редагування вбиральні з мапи -->
+      <EditToiletModal
+          :is-open="isEditModalOpen"
+          :toilet="toiletToEdit"
+          @close="isEditModalOpen = false"
+          @saved="handleMapEditSaved"
+      />
+
       <!-- Кнопка оновлення -->
       <transition
           enter-active-class="transition duration-300 ease-out"
@@ -498,7 +467,7 @@ onUnmounted(() => {
       >
         <div v-if="hasNewData" class="absolute top-24 left-1/2 -translate-x-1/2 z-60">
           <button @click="refreshMapData" class="flex items-center gap-2 px-5 py-2.5 bg-white text-indigo-600 font-bold text-sm rounded-full shadow-lg border border-slate-100 hover:bg-slate-50 active:scale-95 transition-all cursor-pointer">
-            <span class="material-symbols-outlined text-[18px] animate-spin-slow">sync</span> Оновити карту
+            <span class="material-symbols-outlined text-[18px] animate-spin-slow">sync</span> Оновити мапу
           </button>
         </div>
       </transition>
@@ -506,17 +475,26 @@ onUnmounted(() => {
       <!-- Прихований Попап -->
       <div class="hidden">
         <div ref="popupContentRef" class="w-full">
-          <ToiletPopupCard v-if="activeToiletForPopup" :toilet="activeToiletForPopup" @build-route="handlePopupRoute" />
+          <ToiletPopupCard
+              v-if="activeToiletForPopup"
+              :toilet="activeToiletForPopup"
+              :is-admin="isAdmin"
+              @build-route="handlePopupRoute"
+              @edit="handleAdminEdit"
+              @move="handleAdminMove"
+              @delete="handleAdminDelete"
+          />
         </div>
       </div>
 
       <!-- Оверлеї та Контроли -->
       <UserTargetingOverlay :is-active="isManualSelectionMode" @confirm="confirmManualLocation" />
       <ToiletTargetingOverlay :is-active="isPickingToiletMode" @snap-gps="snapToiletToUserGps" @search="handleAddressSearchForToilet" @confirm="confirmToiletLocation" @cancel="isPickingToiletMode = false" />
+      <RelocateOverlay :is-active="isRelocatingMode" @confirm="confirmRelocating" @cancel="cancelRelocating" />
       <MapControls v-show="!isManualSelectionMode && !isPickingToiletMode" :is-locating="isLocating" @locate="showLocationPrompt = true" @add="startPickingToiletLocation" @zoom-in="map?.zoomIn({ duration: 300 })" @zoom-out="map?.zoomOut({ duration: 300 })" @compass="map?.resetNorthPitch({ duration: 500 })" />
     </div>
 
-    <!-- 🔐 ЕКРАН LOGIN (Перекриває мапу завдяки абсолюту та фону) -->
+    <!-- 🔐 ЕКРАН LOGIN -->
     <LoginView
         v-if="currentScreen === 'login'"
         class="absolute inset-0 z-50 bg-slate-50"
@@ -528,7 +506,7 @@ onUnmounted(() => {
         v-if="currentScreen === 'admin' && isAdmin"
         class="absolute inset-0 z-50 bg-slate-50"
         :focus-id="adminFocusToiletId"
-        @logout="handleLogout"
+        @logout="onLogout"
         @teleport="handleTeleportFromAdmin"
     />
 

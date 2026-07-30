@@ -35,7 +35,7 @@ const emit = defineEmits(['close', 'use-google', 'use-internal'])
           </span>
           <BaseButton variant="outline" @click="emit('use-internal')">
             <span class="material-symbols-outlined text-[20px]">explore</span>
-            Вбудована карта
+            Вбудована мапа
           </BaseButton>
         </div>
 

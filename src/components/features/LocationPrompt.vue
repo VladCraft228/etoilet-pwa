@@ -26,7 +26,7 @@ const emit = defineEmits(['use-gps', 'use-manual', 'use-address', 'close'])
 
         <BaseButton variant="secondary" @click="emit('use-manual')">
           <span class="material-symbols-outlined text-[20px]">map</span>
-          Вказати на карті
+          Вказати на мапі
         </BaseButton>
 
         <BaseButton variant="outline" @click="emit('use-address')">

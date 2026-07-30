@@ -63,7 +63,7 @@ const handleClose = () => {
             <span class="material-symbols-outlined text-[16px]">add</span>
           </div>
           <p class="text-xs font-medium leading-tight">
-            <span class="font-bold text-slate-800">Кнопка "Додати"</span> — активує режим прицілу. Перетягніть карту під маркер, щоб надіслати нову точку на модерацію.
+            <span class="font-bold text-slate-800">Кнопка "Додати"</span> — активує режим прицілу. Перетягніть мапу під маркер, щоб надіслати нову точку на модерацію.
           </p>
         </div>
 

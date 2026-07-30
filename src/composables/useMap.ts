@@ -2,7 +2,7 @@ import { ref, shallowRef } from 'vue'
 import maplibregl from 'maplibre-gl'
 
 export function useMap() {
-    const map = ref<maplibregl.Map | null>(null)
+    const map = shallowRef<maplibregl.Map | null>(null)
     const temporaryClickedCoords = ref<[number, number] | null>(null)
     const zoom = ref(13)
     const center = ref<[number, number]>([35.0461, 48.4647]) // [lng, lat]
@@ -10,7 +10,7 @@ export function useMap() {
     const toiletMarkers = shallowRef<maplibregl.Marker[]>([])
     let userLocationMarker: maplibregl.Marker | null = null
 
-    // Ініціалізація карти
+    // Ініціалізація мапи
     const initMap = (containerId: string, onDragStart: () => void) => {
         const mapInstance = new maplibregl.Map({
             container: containerId,
@@ -34,7 +34,7 @@ export function useMap() {
             mapInstance.resize()
         })
 
-        // Оновлення центру при русі карти
+        // Оновлення центру при русі мапи
         mapInstance.on('moveend', () => {
             const c = mapInstance.getCenter()
             center.value = [c.lng, c.lat]
@@ -57,13 +57,13 @@ export function useMap() {
         }
     }
 
-    // Функція для оновлення туалетів на карті за допомогою кластеризації
+    // Функція для оновлення туалетів на мапі за допомогою кластеризації
     const updateToiletsClustered = (toilets: any[], onToiletClick: (id: string) => void) => {
         if (!map.value) return
 
         const sourceId = 'toilets'
 
-        // Генерація іконок через HTML Canvas та додавання в пам'ять карти як Image
+        // Генерація іконок через HTML Canvas та додавання в пам'ять мапи як Image
         // Це гарантує ідеальне згладжування (anti-aliasing) і нульове навантаження на CPU/RAM
         const createWcIcon = (bgColor: string): Promise<HTMLImageElement> => {
             return new Promise((resolve) => {
@@ -105,7 +105,7 @@ export function useMap() {
             })
         }
 
-        // Додаємо іконки в карту один раз
+        // Додаємо іконки в мапу один раз
         const greenIconId = 'wc-green'
         const blueIconId = 'wc-blue'
 

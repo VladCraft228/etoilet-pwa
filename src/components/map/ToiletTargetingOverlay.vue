@@ -8,7 +8,7 @@ const emit = defineEmits(['snap-gps', 'search', 'confirm', 'cancel'])
 <template>
   <div v-if="isActive" class="absolute inset-0 z-1000 pointer-events-none flex flex-col items-center justify-between p-6">
     <div class="bg-slate-900/90 text-white text-xs font-medium px-4 py-2.5 rounded-full shadow-md mt-4 animate-fade-in text-center max-w-xs">
-      📍 Перетягніть карту під приціл або використайте швидкі кнопки
+      📍 Перетягніть мапу під приціл або використайте швидкі кнопки
     </div>
 
     <div class="absolute inset-0 flex items-center justify-center pointer-events-none">

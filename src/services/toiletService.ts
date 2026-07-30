@@ -122,6 +122,16 @@ export const toiletService = {
         return data
     },
 
+    async updateToiletCoordinates(id: string, latitude: number, longitude: number) {
+        const { data, error } = await supabase
+            .from('toilets')
+            .update({ latitude, longitude })
+            .eq('id', id)
+
+        if (error) throw error
+        return data
+    },
+
     // Оновлення фото модератором (теж у корінь бакета)
     async updateToiletImage(toiletId: string, imageFile: File) {
         // Оскільки в компоненті ми вже згенерували чисте ім'я файлу на кшталт `id_timestamp.ext`
