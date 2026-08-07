@@ -34,14 +34,14 @@ const title = computed(() =>
       />
     </div>
 
-    <!-- Контентна частина -->
+    <!-- Контентна частина зі скролом -->
     <div class="p-3 flex flex-col gap-2.5">
       <h3 class="font-bold text-slate-900 text-base leading-tight mb-0.5">
         {{ title }}
       </h3>
 
       <!-- Головна інфо-стрічка: ціна та години роботи -->
-      <div v-if="toilet.price !== undefined || toilet.work_hours" class="flex gap-1.5 text-xs w-full">
+      <div v-if="toilet.price !== undefined || toilet.work_hours" class="flex gap-1.5 text-xs w-full shrink-0">
 
         <!-- Ціна -->
         <div class="flex-1 w-1/2 min-w-0 flex items-center gap-1 p-1.5 bg-emerald-50/80 border border-emerald-100 rounded-lg">
@@ -49,8 +49,8 @@ const title = computed(() =>
           <div class="flex flex-col min-w-0">
             <span class="text-[9px] text-emerald-700/80 font-medium leading-tight">Вартість</span>
             <span class="font-bold text-emerald-950 text-[10px] sm:text-xs leading-tight wrap-break-word">
-    {{ toilet.price === 0 ? 'Безкоштовно' : `${toilet.price} грн` }}
-  </span>
+              {{ toilet.price === 0 ? 'Безкоштовно' : `${toilet.price} грн` }}
+            </span>
           </div>
         </div>
 
@@ -60,8 +60,8 @@ const title = computed(() =>
           <div class="flex flex-col min-w-0">
             <span class="text-[9px] text-slate-400 font-medium leading-tight">Час роботи</span>
             <span class="font-bold text-slate-800 text-[10px] sm:text-xs leading-tight wrap-break-word">
-    {{ toilet.work_hours }}
-  </span>
+              {{ toilet.work_hours }}
+            </span>
           </div>
         </div>
 
@@ -70,7 +70,7 @@ const title = computed(() =>
       <!-- Кабінки/пісуари -->
       <div
           v-if="toilet.stalls_count || toilet.urinals_count"
-          class="flex items-center gap-2 p-1.5 bg-slate-50 border border-slate-100 rounded-lg text-slate-600 text-xs"
+          class="flex items-center gap-2 p-1.5 bg-slate-50 border border-slate-100 rounded-lg text-slate-600 text-xs shrink-0"
       >
         <span class="flex items-center gap-1 shrink-0" title="Кабінки">
           <span class="material-symbols-outlined text-[16px] text-slate-500">door_front</span>
@@ -89,10 +89,10 @@ const title = computed(() =>
         </span>
       </div>
 
-      <!-- Зручності: іконка + короткий текстовий підпис -->
+      <!-- Зручності -->
       <div
           v-if="toilet.has_wheelchair_accessible !== undefined || toilet.has_washbasin || toilet.type === 'bio'"
-          class="flex flex-wrap gap-1.5 w-full"
+          class="flex flex-wrap gap-1.5 w-full shrink-0"
       >
         <!-- Візок -->
         <span
@@ -143,25 +143,32 @@ const title = computed(() =>
         </template>
       </div>
 
-      <!-- Коментар для біотуалетів -->
-      <p
-          v-if="toilet.type === 'bio' && toilet.user_comment"
-          class="text-xs text-slate-600 italic bg-slate-50 p-2 rounded-lg border border-dashed border-slate-200"
+      <!-- Коментар -->
+      <div
+          v-if="toilet.user_comment"
+          class="bg-amber-50/40 p-3 rounded-xl border border-dashed border-amber-200 mt-1"
       >
-        «{{ toilet.user_comment }}»
-      </p>
+        <div class="max-h-11 overflow-y-auto custom-scrollbar">
+          <p class="text-[13px] text-slate-700 italic relative font-medium leading-relaxed">
+            <span class="absolute -top-1 -left-1 text-amber-300 text-lg">"</span>
+            <span class="pl-2.5 block">
+        {{ toilet.user_comment }}
+      </span>
+          </p>
+        </div>
+      </div>
 
       <!-- Кнопка маршруту -->
       <button
           @click="emit('build-route', toilet)"
-          class="w-full flex items-center justify-center gap-1.5 bg-indigo-600 text-white text-xs font-bold py-2 rounded-lg hover:bg-indigo-700 active:scale-[0.98] transition-all shadow-sm cursor-pointer"
+          class="w-full flex items-center justify-center gap-1.5 bg-indigo-600 text-white text-xs font-bold py-2 rounded-lg hover:bg-indigo-700 active:scale-[0.98] transition-all shadow-sm cursor-pointer shrink-0"
       >
         <span class="material-symbols-outlined text-[16px]">directions_walk</span>
         Маршрут сюди
       </button>
 
       <!-- Адмін-панель -->
-      <div v-if="isAdmin" class="pt-2 border-t border-slate-200/60">
+      <div v-if="isAdmin" class="pt-2 border-t border-slate-200/60 shrink-0">
         <span class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
           Керування
         </span>
@@ -192,3 +199,8 @@ const title = computed(() =>
     </div>
   </div>
 </template>
+
+<style scoped>
+.custom-scrollbar::-webkit-scrollbar { width: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+</style>

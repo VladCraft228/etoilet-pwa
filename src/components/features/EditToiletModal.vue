@@ -311,7 +311,7 @@ const saveEditedToilet = async () => {
       </BaseButton>
       <BaseButton variant="primary" class="py-2.5! px-6! shadow-md shadow-indigo-200" @click="saveEditedToilet" :disabled="isSaving || isCompressing">
         <span v-if="isSaving || isCompressing" class="material-symbols-outlined text-[20px] animate-spin mr-1">sync</span>
-        {{ isSaving ? 'Збереження...' : isCompressing ? 'Обробка фото...' : 'Зберегти зміни' }}
+        {{ isSaving ? 'Збереження...' : isCompressing ? 'Обробка фото...' : 'Зберегти' }}
       </BaseButton>
     </div>
   </BaseModal>

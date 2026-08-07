@@ -10,6 +10,21 @@ export function useMap() {
     const toiletMarkers = shallowRef<maplibregl.Marker[]>([])
     let userLocationMarker: maplibregl.Marker | null = null
 
+    // Стан вибраного туалету для динамічного масштабування іконки
+    const selectedToiletId = ref<string | null>(null)
+
+    // Допоміжна функція формування виразу icon-size з правильним вкладенням (interpolate на самому верху)
+    const getIconSizeExpression = (activeId: string | null) => {
+        return [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            10, ['case', ['==', ['get', 'id'], activeId || ''], 0.45 * 1.3, 0.45],
+            14, ['case', ['==', ['get', 'id'], activeId || ''], 0.55 * 1.3, 0.55],
+            17, ['case', ['==', ['get', 'id'], activeId || ''], 0.65 * 1.3, 0.65]
+        ]
+    }
+
     // Ініціалізація мапи
     const initMap = (containerId: string, onDragStart: () => void) => {
         const mapInstance = new maplibregl.Map({
@@ -57,6 +72,14 @@ export function useMap() {
         }
     }
 
+    // Функція для підсвічування/збільшення обраної іконки
+    const setSelectedToiletId = (id: string | null) => {
+        selectedToiletId.value = id
+        if (!map.value || !map.value.getLayer('unclustered-point')) return
+
+        map.value.setLayoutProperty('unclustered-point', 'icon-size', getIconSizeExpression(id))
+    }
+
     // Функція для оновлення туалетів на мапі за допомогою кластеризації
     const updateToiletsClustered = (toilets: any[], onToiletClick: (id: string) => void) => {
         if (!map.value) return
@@ -64,7 +87,6 @@ export function useMap() {
         const sourceId = 'toilets'
 
         // Генерація іконок через HTML Canvas та додавання в пам'ять мапи як Image
-        // Це гарантує ідеальне згладжування (anti-aliasing) і нульове навантаження на CPU/RAM
         const createWcIcon = (bgColor: string): Promise<HTMLImageElement> => {
             return new Promise((resolve) => {
                 const canvas = document.createElement('canvas')
@@ -150,7 +172,7 @@ export function useMap() {
             clusterRadius: 50
         })
 
-        // 1. Шар кластерів (кружечки) — додано інтерполяцію радіуса від зуму
+        // 1. Шар кластерів (кружечки)
         map.value.addLayer({
             id: 'clusters',
             type: 'circle',
@@ -158,7 +180,6 @@ export function useMap() {
             filter: ['has', 'point_count'],
             paint: {
                 'circle-color': ['step', ['get', 'point_count'], '#10B981', 5, '#059669', 15, '#047857'],
-                // Динамічний радіус: базовий розмір залежить від кількості, але масштабується із зумом
                 'circle-radius': [
                     'interpolate',
                     ['linear'],
@@ -171,7 +192,7 @@ export function useMap() {
             }
         })
 
-// 2. Цифри всередині кластерів — розмір тексту тепер теж плавно росте
+        // 2. Цифри всередині кластерів
         map.value.addLayer({
             id: 'cluster-count',
             type: 'symbol',
@@ -193,7 +214,7 @@ export function useMap() {
             }
         })
 
-// 3. Одиночні маркери — затиснуті в адекватні рамки
+        // 3. Одиночні маркери
         map.value.addLayer({
             id: 'unclustered-point',
             type: 'symbol',
@@ -206,15 +227,7 @@ export function useMap() {
                     'public', blueIconId,
                     greenIconId
                 ],
-                // Збалансована шкала: від акуратних 32px до чітких, але не величезних 46px
-                'icon-size': [
-                    'interpolate',
-                    ['linear'],
-                    ['zoom'],
-                    10, 0.45, // ~32px (акуратні на віддалі)
-                    14, 0.55, // ~40px (дефолтний чіткий розмір)
-                    17, 0.65  // ~46px (максимальний розмір на макро-зумі)
-                ],
+                'icon-size': getIconSizeExpression(selectedToiletId.value) as any,
                 'icon-allow-overlap': true,
                 'icon-ignore-placement': true
             }
@@ -233,7 +246,9 @@ export function useMap() {
         map.value.on('click', 'unclustered-point', (e) => {
             const features = map.value!.queryRenderedFeatures(e.point, { layers: ['unclustered-point'] })
             if (!features.length) return
-            onToiletClick(features[0].properties.id)
+            const id = features[0].properties.id
+            setSelectedToiletId(id) // Збільшуємо обраний маркер
+            onToiletClick(id)
         })
 
         const setPointer = () => { map.value!.getCanvas().style.cursor = 'pointer' }
@@ -243,11 +258,10 @@ export function useMap() {
         map.value.on('mouseenter', 'unclustered-point', setPointer)
         map.value.on('mouseleave', 'unclustered-point', resetCursor)
     }
-    // Додай цю функцію всередину useMap()
+
     const fitRouteBounds = (coords: [number, number][]) => {
         if (!map.value || coords.length === 0) return
 
-        // coords приходять у форматі [lat, lng]
         const lats = coords.map(c => c[0])
         const lngs = coords.map(c => c[1])
 
@@ -258,11 +272,10 @@ export function useMap() {
 
         map.value.fitBounds(
             [
-                [minLng, minLat], // Південно-західний кут
-                [maxLng, maxLat]  // Північно-східний кут
+                [minLng, minLat],
+                [maxLng, maxLat]
             ],
             {
-                // Відступи у пікселях, щоб маршрут не залазив під UI-плашки
                 padding: { top: 100, bottom: 160, left: 60, right: 60 },
                 duration: 1200,
                 essential: true
@@ -270,7 +283,6 @@ export function useMap() {
         )
     }
 
-    // Очищення маркерів туалетів
     const clearToiletMarkers = () => {
         toiletMarkers.value.forEach(m => m.remove())
         toiletMarkers.value = []
@@ -283,6 +295,8 @@ export function useMap() {
         toiletMarkers,
         userLocationMarker,
         temporaryClickedCoords,
+        selectedToiletId,
+        setSelectedToiletId,
         updateToiletsClustered,
         initMap,
         flyToCoords,

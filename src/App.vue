@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, defineAsyncComponent, nextTick } from 'vue'
+import { ref, watch, onMounted, onUnmounted, defineAsyncComponent, nextTick } from 'vue'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
@@ -18,7 +18,8 @@ import MapControls from './components/map/MapControls.vue'
 import ToiletTargetingOverlay from "./components/map/ToiletTargetingOverlay.vue"
 import UserTargetingOverlay from "./components/map/UserTargetingOverlay.vue"
 import RouteInfoBanner from "./components/map/RouteInfoBanner.vue"
-import ToiletPopupCard from "./components/map/ToiletPopupCard.vue"
+import ToiletPopupCard from "./components/map/ToiletPopupCard.vue"     // 🖥️ Десктоп: компактна картка в maplibregl.Popup
+import ToiletBottomSheet from "./components/map/ToiletBottomSheet.vue" // 📱 Мобільні: bottom sheet
 import AdminView from "./components/views/AdminView.vue"
 import LoginView from "./components/views/LoginView.vue"
 import EditToiletModal from "./components/features/EditToiletModal.vue"
@@ -41,7 +42,7 @@ const { isAdmin, initAuth, handleLogout } = useAuth()
 const { approvedToilets, hasNewData, refreshMapData, initRealtime, loadToiletsData } = useRealtimeToilets()
 const { userLocation, isLocating, startTrackingLocation, stopTrackingLocation } = useGeolocation()
 const { activeRouteCoords, routeInfo, buildRoute, clearRoute } = useRouting()
-const { map, center, temporaryClickedCoords, initMap, flyToCoords, fitRouteBounds, updateToiletsClustered } = useMap()
+const { map, center, temporaryClickedCoords, initMap, flyToCoords, fitRouteBounds, updateToiletsClustered, setSelectedToiletId } = useMap()
 const toast = useToast()
 
 // --- СТАН UI ТА МОДАЛОК ---
@@ -65,17 +66,67 @@ const targetToiletForRoute = ref<any>(null)
 const isRelocatingMode = ref(false)
 const relocatingToiletId = ref<string | null>(null)
 let userLocationMarker: maplibregl.Marker | null = null
-const popupContentRef = ref<HTMLElement | null>(null)
-const activeToiletForPopup = ref<any>(null)
-let activeMapPopup: maplibregl.Popup | null = null
+const activeToiletForPopup = ref<Toilet | null>(null)
 let pendingReviewMarker: maplibregl.Marker | null = null
 
+// --- 📐 RESPONSIVE: mobile bottom sheet vs desktop popup ---
+const DESKTOP_BREAKPOINT = 640
+const isDesktop = ref(window.innerWidth >= DESKTOP_BREAKPOINT)
+
+// Слідкуємо за активним туалетом для підсвічування та збільшення маркеру
+watch(activeToiletForPopup, (newToilet) => {
+  setSelectedToiletId(newToilet ? newToilet.id : null)
+})
+
+const handleResize = () => {
+  const wasDesktop = isDesktop.value
+  isDesktop.value = window.innerWidth >= DESKTOP_BREAKPOINT
+
+  if (wasDesktop !== isDesktop.value && activeToiletForPopup.value) {
+    if (activeMapPopup) {
+      activeMapPopup.remove()
+      activeMapPopup = null
+    }
+    if (isDesktop.value) {
+      nextTick(() => openDesktopPopup(activeToiletForPopup.value!))
+    }
+  }
+}
+
+// --- Десктопний popup (MapLibre), рендериться з прихованого DOM-вузла ---
+const popupContentRef = ref<HTMLElement | null>(null)
+let activeMapPopup: maplibregl.Popup | null = null
+
+const openDesktopPopup = (toilet: Toilet) => {
+  if (!map.value || !popupContentRef.value) return
+  if (toilet.longitude == null || toilet.latitude == null) return
+
+  if (activeMapPopup) activeMapPopup.remove()
+
+  activeMapPopup = new maplibregl.Popup({
+    closeButton: true,
+    closeOnClick: true,
+    anchor: 'bottom',
+    offset: 25,
+    maxWidth: '300px'
+  })
+      .setDOMContent(popupContentRef.value)
+      .setLngLat([toilet.longitude, toilet.latitude])
+      .addTo(map.value as any)
+
+  activeMapPopup.on('close', () => {
+    if (activeToiletForPopup.value?.id === toilet.id) {
+      activeToiletForPopup.value = null
+      setSelectedToiletId(null)
+    }
+  })
+}
 
 // ==========================================
 // 🔐 НАВІГАЦІЯ
 // ==========================================
 const navigateTo = (screen: 'map' | 'login' | 'admin') => {
-  if (screen === 'map') adminFocusToiletId.value = null // Скидаємо фокус
+  if (screen === 'map') adminFocusToiletId.value = null
   if (screen === 'admin' && !isAdmin.value) {
     currentScreen.value = 'login'
     return
@@ -94,26 +145,42 @@ const selectToiletById = (id: string) => {
   if (!map.value) return
   const toilet = approvedToilets.value.find(t => t.id === id)
   if (!toilet) return
+  if (toilet.longitude == null || toilet.latitude == null) return
 
   activeToiletForPopup.value = toilet
-  if (activeMapPopup) activeMapPopup.remove()
 
-  import('vue').then(({ nextTick }) => {
-    nextTick(() => {
-      if (!popupContentRef.value) return
-      activeMapPopup = new maplibregl.Popup({ closeButton: true, closeOnClick: true, offset: 20, maxWidth: '320px' })
-          .setDOMContent(popupContentRef.value!)
-          .setLngLat([toilet.longitude, toilet.latitude])
-          .addTo(map.value as any)
-
-      map.value!.flyTo({ center: [toilet.longitude, toilet.latitude], zoom: Math.max(map.value!.getZoom(), 15), speed: 1.2 })
+  if (isDesktop.value) {
+    nextTick(() => openDesktopPopup(toilet))
+    map.value.flyTo({
+      center: [toilet.longitude, toilet.latitude],
+      zoom: Math.max(map.value.getZoom(), 16),
+      padding: { top: 350, bottom: 50, left: 20, right: 20 },
+      speed: 1.2
     })
-  })
+  } else {
+    map.value.flyTo({
+      center: [toilet.longitude, toilet.latitude],
+      zoom: Math.max(map.value.getZoom(), 16),
+      padding: { bottom: window.innerHeight * 0.4 },
+      speed: 1.2
+    })
+  }
+}
+
+const closeActivePopup = () => {
+  if (activeMapPopup) {
+    activeMapPopup.remove()
+    activeMapPopup = null
+  }
+  activeToiletForPopup.value = null
+  setSelectedToiletId(null)
 }
 
 const handlePopupRoute = () => {
-  if (activeMapPopup) activeMapPopup.remove()
-  if (activeToiletForPopup.value) openRouteChoice(activeToiletForPopup.value)
+  if (activeToiletForPopup.value) {
+    openRouteChoice(activeToiletForPopup.value)
+  }
+  closeActivePopup()
 }
 
 const handleGpsLocation = () => {
@@ -222,7 +289,6 @@ const handleWelcomeClose = (dontShowAgain: boolean) => {
   showWelcomeModal.value = false
 }
 
-// Телепортація з адмін-панелі до конкретної мітки
 const handleTeleportFromAdmin = async (id: string, lat: number, lng: number) => {
   currentScreen.value = 'map'
   await nextTick()
@@ -266,7 +332,7 @@ const handleTeleportFromAdmin = async (id: string, lat: number, lng: number) => 
         currentScreen.value = 'admin'
       })
 
-      const popup = new maplibregl.Popup({ closeButton: true, closeOnClick: true, offset: 45 }).setDOMContent(popupNode)
+      const popup = new maplibregl.Popup({ closeButton: true, closeOnClick: true, anchor: 'bottom', offset: 45 }).setDOMContent(popupNode)
 
       pendingReviewMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
           .setLngLat([lng, lat])
@@ -280,20 +346,31 @@ const handleTeleportFromAdmin = async (id: string, lat: number, lng: number) => 
 }
 
 // ==========================================
-// 🛠️ АДМІН-ДІЇ НА мапІ
+// 🛠️ АДМІН-ДІЇ НА МАПІ
 // ==========================================
 const handleAdminEdit = (toilet: Toilet) => {
-  activeToiletForPopup.value = null
-  if (activeMapPopup) activeMapPopup.remove()
+  closeActivePopup()
   toiletToEdit.value = toilet
   isEditModalOpen.value = true
+}
+
+const handleAdminMove = (toilet: Toilet) => {
+  if (!toilet.longitude || !toilet.latitude) {
+    toast.error('У цієї локації відсутні координати')
+    return
+  }
+
+  closeActivePopup()
+  isRelocatingMode.value = true
+  relocatingToiletId.value = toilet.id
+  flyToCoords(toilet.longitude, toilet.latitude, 17)
 }
 
 const handleAdminDelete = async (toiletId: string) => {
   if (!confirm('Ви впевнені, що хочете видалити цей туалет назавжди?')) return
   try {
     await toiletService.deleteToilet(toiletId, [])
-    activeToiletForPopup.value = null
+    closeActivePopup()
     await refreshMapData()
     toast.success('Локацію успішно видалено')
   } catch (error) {
@@ -307,18 +384,9 @@ const handleMapEditSaved = () => {
   refreshMapData()
 }
 
-const handleAdminMove = (toilet: Toilet) => {
-  if (!toilet.longitude || !toilet.latitude) return
-  activeToiletForPopup.value = null
-  if (activeMapPopup) activeMapPopup.remove()
-  isRelocatingMode.value = true
-  relocatingToiletId.value = toilet.id
-  flyToCoords(toilet.longitude, toilet.latitude, 17)
-}
-
 const confirmRelocating = async () => {
   if (!relocatingToiletId.value) return
-  const [lng, lat] = center.value // Беремо поточний центр мапи
+  const [lng, lat] = center.value
 
   try {
     await toiletService.updateToiletCoordinates(relocatingToiletId.value, lat, lng)
@@ -394,13 +462,15 @@ watch(currentScreen, async (newScreen) => {
       pendingReviewMarker.remove()
       pendingReviewMarker = null
     }
+    closeActivePopup()
   }
 })
 
 onMounted(async () => {
   if (localStorage.getItem('hideAlphaWelcome') !== 'true') showWelcomeModal.value = true
 
-  // Ініціалізуємо слухачів авторизації (перевірка адміна)
+  window.addEventListener('resize', handleResize)
+
   await initAuth(currentScreen)
 
   const mapInstance = initMap('main-map', () => {
@@ -417,9 +487,12 @@ onMounted(async () => {
     }
   })
 
-  // Ініціалізуємо слухачів БД і підтягуємо дані
   await loadToiletsData()
   initRealtime()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
 })
 </script>
 
@@ -472,11 +545,11 @@ onMounted(async () => {
         </div>
       </transition>
 
-      <!-- Прихований Попап -->
+      <!-- 🖥️ Прихований контейнер: рендер ToiletPopupCard у DOM (desktop) -->
       <div class="hidden">
-        <div ref="popupContentRef" class="w-full">
+        <div ref="popupContentRef">
           <ToiletPopupCard
-              v-if="activeToiletForPopup"
+              v-if="activeToiletForPopup && isDesktop"
               :toilet="activeToiletForPopup"
               :is-admin="isAdmin"
               @build-route="handlePopupRoute"
@@ -487,11 +560,31 @@ onMounted(async () => {
         </div>
       </div>
 
+      <!-- 📱 Мобільний Bottom Sheet -->
+      <ToiletBottomSheet
+          v-if="activeToiletForPopup && !isDesktop"
+          :toilet="activeToiletForPopup"
+          :is-admin="isAdmin"
+          @close="closeActivePopup"
+          @build-route="handlePopupRoute"
+          @edit="handleAdminEdit"
+          @move="handleAdminMove"
+          @delete="handleAdminDelete"
+      />
+
       <!-- Оверлеї та Контроли -->
       <UserTargetingOverlay :is-active="isManualSelectionMode" @confirm="confirmManualLocation" />
       <ToiletTargetingOverlay :is-active="isPickingToiletMode" @snap-gps="snapToiletToUserGps" @search="handleAddressSearchForToilet" @confirm="confirmToiletLocation" @cancel="isPickingToiletMode = false" />
       <RelocateOverlay :is-active="isRelocatingMode" @confirm="confirmRelocating" @cancel="cancelRelocating" />
-      <MapControls v-show="!isManualSelectionMode && !isPickingToiletMode" :is-locating="isLocating" @locate="showLocationPrompt = true" @add="startPickingToiletLocation" @zoom-in="map?.zoomIn({ duration: 300 })" @zoom-out="map?.zoomOut({ duration: 300 })" @compass="map?.resetNorthPitch({ duration: 500 })" />
+      <MapControls
+          v-show="!isManualSelectionMode && !isPickingToiletMode && !(activeToiletForPopup && !isDesktop)"
+          :is-locating="isLocating"
+          @locate="showLocationPrompt = true"
+          @add="startPickingToiletLocation"
+          @zoom-in="map?.zoomIn({ duration: 300 })"
+          @zoom-out="map?.zoomOut({ duration: 300 })"
+          @compass="map?.resetNorthPitch({ duration: 500 })"
+      />
     </div>
 
     <!-- 🔐 ЕКРАН LOGIN -->
@@ -512,3 +605,7 @@ onMounted(async () => {
 
   </main>
 </template>
+
+<style scoped>
+/* Додаткові CSS стилі при потребі */
+</style>

@@ -23,7 +23,7 @@ export function useRealtimeToilets() {
         toast.info('Оновлюємо мапу...', { timeout: 1500 })
         await loadToiletsData()
         hasNewData.value = false
-        toast.success('мапа успішно оновлена!')
+        toast.success('Мапа успішно оновлена!')
     }
 
     const initRealtime = () => {
