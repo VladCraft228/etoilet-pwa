@@ -183,40 +183,56 @@ const toggleExpand = () => {
               v-if="toilet.stalls_count"
               class="inline-flex max-[340px]:w-full items-center max-[340px]:justify-center gap-1.5 bg-slate-100 text-slate-700 text-[13px] font-bold px-3 py-1.5 rounded-xl border border-slate-200/60"
           >
-    <span class="material-symbols-outlined text-[18px] text-slate-400">door_front</span>
-    {{ toilet.stalls_count }} кабін.
-  </span>
+            <span class="material-symbols-outlined text-[18px] text-slate-400">door_front</span>
+            {{ toilet.stalls_count }} кабін.
+          </span>
 
           <!-- Пісуари -->
           <span
               v-if="toilet.urinals_count"
               class="inline-flex max-[340px]:w-full items-center max-[340px]:justify-center gap-1.5 bg-slate-100 text-slate-700 text-[13px] font-bold px-3 py-1.5 rounded-xl border border-slate-200/60"
           >
-    <span class="material-symbols-outlined text-[18px] text-slate-400">man</span>
-    {{ toilet.urinals_count }} пісуар.
-  </span>
+            <span class="material-symbols-outlined text-[18px] text-slate-400">man</span>
+            {{ toilet.urinals_count }} пісуар.
+          </span>
 
           <!-- Доступність -->
           <span
               v-if="toilet.has_wheelchair_accessible"
               class="inline-flex max-[340px]:w-full items-center max-[340px]:justify-center gap-1 bg-emerald-50 text-emerald-700 text-[13px] font-bold px-3 py-1.5 rounded-xl border border-emerald-100"
           >
-    <span class="material-symbols-outlined text-[16px]">accessible</span> Доступно для візків
-  </span>
+            <span class="material-symbols-outlined text-[16px]">accessible</span> Доступно для візків
+          </span>
           <span
               v-else
               class="inline-flex max-[340px]:w-full items-center max-[340px]:justify-center gap-1 bg-slate-50 text-slate-500 text-[13px] font-medium px-3 py-1.5 rounded-xl border border-slate-200"
           >
-    <span class="material-symbols-outlined text-[16px]">not_accessible</span> Не облаштовано
-  </span>
+            <span class="material-symbols-outlined text-[16px]">not_accessible</span> Не облаштовано
+          </span>
 
           <!-- Рукомийник -->
           <span
               v-if="toilet.has_washbasin"
               class="inline-flex max-[340px]:w-full items-center max-[340px]:justify-center gap-1 bg-blue-50 text-blue-700 text-[13px] font-bold px-3 py-1.5 rounded-xl border border-blue-100"
           >
-    <span class="material-symbols-outlined text-[16px]">soap</span> Рукомийник
-  </span>
+            <span class="material-symbols-outlined text-[16px]">soap</span> Рукомийник
+          </span>
+
+          <!-- Замок (для біотуалетів) -->
+          <template v-if="toilet.type === 'bio'">
+            <span
+                v-if="!toilet.is_lock_broken"
+                class="inline-flex max-[340px]:w-full items-center max-[340px]:justify-center gap-1 bg-indigo-50 text-indigo-700 text-[13px] font-bold px-3 py-1.5 rounded-xl border border-indigo-100"
+            >
+              <span class="material-symbols-outlined text-[16px]">lock</span> Є замок
+            </span>
+            <span
+                v-else
+                class="inline-flex max-[340px]:w-full items-center max-[340px]:justify-center gap-1 bg-red-50 text-red-700 text-[13px] font-bold px-3 py-1.5 rounded-xl border border-red-100"
+            >
+              <span class="material-symbols-outlined text-[16px]">lock_open</span> Замок зламано
+            </span>
+          </template>
         </div>
 
         <!-- 💬 Коментар користувача -->
