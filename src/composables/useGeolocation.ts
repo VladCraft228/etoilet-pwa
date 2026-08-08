@@ -1,5 +1,5 @@
 // src/composables/useGeolocation.ts
-import { ref, onUnmounted } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import { useToast } from "vue-toastification"
 
 const toast = useToast()
@@ -7,66 +7,92 @@ const toast = useToast()
 export function useGeolocation() {
     const userLocation = ref<[number, number] | null>(null)
     const isLocating = ref(false)
-    const watchId = ref<number | null>(null) // Зберігаємо ID відстеження
+    const accuracy = ref<number | null>(null) // Зберігаємо точність для UI при потребі
+    const watchId = ref<number | null>(null)
 
-    // 1. Початок постійного відстеження (Real-time)
     const startTrackingLocation = (
         onSuccess: (lat: number, lng: number) => void,
         onErrorFallback?: () => void
     ) => {
         if (!navigator.geolocation) {
-            toast.error('Геолокація не підтримується вашим пристроєм або браузером.')
+            toast.error('Геолокація не підтримується вашим пристроєм.')
             return
         }
 
-        // Якщо вже відстежуємо — спочатку скидаємо старий watch
         stopTrackingLocation()
-
         isLocating.value = true
+
+        let hasFirstFix = false
+        let bestAccuracy = Infinity
 
         watchId.value = navigator.geolocation.watchPosition(
             (position) => {
-                const { latitude, longitude } = position.coords
-                userLocation.value = [latitude, longitude]
-                isLocating.value = false
+                const { latitude, longitude, accuracy: currentAccuracy } = position.coords
 
-                // Колбек тепер викликатиметься постійно при русі користувача
-                onSuccess(latitude, longitude)
+                // 1. ПЕРШИЙ ФІКС: приймаємо з точністю до 150м, аби негайно показати "ти приблизно тут"
+                if (!hasFirstFix) {
+                    if (currentAccuracy > 150) return // зовсім сміття (наприклад, по IP) ігноруємо
+
+                    userLocation.value = [latitude, longitude]
+                    accuracy.value = currentAccuracy
+                    bestAccuracy = currentAccuracy
+                    hasFirstFix = true
+                    isLocating.value = false
+
+                    onSuccess(latitude, longitude)
+                    return
+                }
+
+                // 2. НАСТУПНІ ОНОВЛЕННЯ (GPS УТОЧНЕННЯ / РУХ):
+                // Якщо точність стає кращою або вона адекватна (< 30m) — оновлюємо маркер
+                if (currentAccuracy <= 30 || currentAccuracy <= bestAccuracy) {
+                    userLocation.value = [latitude, longitude]
+                    accuracy.value = currentAccuracy
+                    bestAccuracy = Math.min(bestAccuracy, currentAccuracy)
+
+                    onSuccess(latitude, longitude)
+                } else {
+                    // Ігноруємо спотворення/стрибки сигналу (наприклад, раптовий відскок на 45m)
+                    console.log(`[GPS Noise Filtered] Skipped fix with accuracy: ${currentAccuracy}m`)
+                }
             },
             (error) => {
                 console.warn('GPS Error:', error)
                 isLocating.value = false
-                toast.warning('Помилка геолокації. Будь ласка, дозвольте доступ або знайдіть місце вручну.')
 
-                if (onErrorFallback) onErrorFallback()
+                if (error.code === error.PERMISSION_DENIED) {
+                    toast.warning('Дозвольте доступ до геолокації у налаштуваннях.')
+                    onErrorFallback?.()
+                } else if (error.code === error.TIMEOUT) {
+                    toast.info('Слабкий GPS-сигнал. Знайдіть відкритіше місце.')
+                }
             },
             {
-                enableHighAccuracy: true, // Максимальна точність (використовує GPS)
-                maximumAge: 0,             // Не використовувати закешовану позицію
-                timeout: 10000             // Очікувати відповідь не довше 10 сек
+                enableHighAccuracy: true,
+                maximumAge: 2000,
+                timeout: 12000
             }
         )
     }
 
-    // 2. Функція для зупинки відстеження (щоб не садити батарею користувача)
     const stopTrackingLocation = () => {
         if (watchId.value !== null) {
             navigator.geolocation.clearWatch(watchId.value)
             watchId.value = null
             isLocating.value = false
-            console.log('⏹️ Відстеження геолокації зупинено.')
+            accuracy.value = null
         }
     }
 
-    // Очищаємо підписку при знищенні компонента
     onUnmounted(() => {
         stopTrackingLocation()
     })
 
     return {
         userLocation,
+        accuracy,
         isLocating,
-        isTracking: ref(watchId.value !== null), // Стан: чи активний трекінг зараз
+        isTracking: computed(() => watchId.value !== null),
         startTrackingLocation,
         stopTrackingLocation
     }

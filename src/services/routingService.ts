@@ -3,30 +3,80 @@
 export const routingService = {
     async getWalkingRoute(points: [number, number][]) {
         try {
+            if (points.length < 2) {
+                return null
+            }
+
             const coordinatesString = points
-                .map(point => `${point[1]},${point[0]}`)
+                .map(([lat, lng]) => `${lng},${lat}`)
                 .join(';')
 
-            // Створюємо рядок радіусів, наприклад: "200;200" для кожної точки
-            const radiusesString = points.map(() => '200').join(';')
+            const baseUrl =
+                `https://routing.openstreetmap.de/routed-foot/route/v1/driving/` +
+                `${coordinatesString}`
 
-            // Додали &radiuses=${radiusesString} у запит
-            const url = `https://router.project-osrm.org/route/v1/foot/${coordinatesString}?overview=full&geometries=geojson&radiuses=${radiusesString}`
+            // 1. Перший запит — точний snapping у межах 50 м
+            const radiusesString = points
+                .map(() => '50')
+                .join(';')
 
-            const response = await fetch(url)
-            const data = await response.json()
+            const urlWithRadius =
+                `${baseUrl}` +
+                `?overview=full` +
+                `&geometries=geojson` +
+                `&radiuses=${radiusesString}` +
+                `&steps=true` +
+                `&alternatives=false`
 
-            if (data.routes && data.routes.length > 0) {
-                const route = data.routes[0]
-                const coords = route.geometry.coordinates.map((c: any) => [c[1], c[0]])
+            let response = await fetch(urlWithRadius)
+            let data: any = null
 
-                return {
-                    coords,
-                    distance: route.distance,
-                    duration: route.duration
-                }
+            if (response.ok) {
+                data = await response.json()
             }
-            return null
+
+            // 2. Якщо точки не знайшлися в межах 50 м (або сервер повернув NoSegment) —
+            // повторюємо без обмеження радіуса
+            if (!data || data.code === 'NoSegment' || data.code === 'NoRoute') {
+                console.warn('OSRM: NoSegment/NoRoute при radius=50. Повторюємо без radiuses.')
+
+                const urlWithoutRadius =
+                    `${baseUrl}` +
+                    `?overview=full` +
+                    `&geometries=geojson` +
+                    `&steps=true` +
+                    `&alternatives=false`
+
+                response = await fetch(urlWithoutRadius)
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`)
+                }
+
+                data = await response.json()
+            }
+
+            if (data.code !== 'Ok' || !data.routes?.length) {
+                console.warn('OSRM не знайшов маршрут:', data)
+                return null
+            }
+
+            const route = data.routes[0]
+
+            const coords = route.geometry.coordinates.map(
+                ([lng, lat]: [number, number]) =>
+                    [lat, lng] as [number, number]
+            )
+
+            return {
+                coords,
+                distance: route.distance,
+                duration: route.duration,
+                steps: route.legs?.flatMap(
+                    (leg: any) => leg.steps ?? []
+                ) ?? []
+            }
+
         } catch (error) {
             console.error('Помилка побудови маршруту:', error)
             return null
