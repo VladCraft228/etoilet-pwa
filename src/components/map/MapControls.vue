@@ -1,9 +1,17 @@
 <script setup lang="ts">
 defineProps<{
   isLocating: boolean
+  isAnalyticsActive?: boolean
 }>()
 
-const emit = defineEmits(['locate', 'add', 'zoom-in', 'zoom-out', 'compass'])
+const emit = defineEmits([
+  'locate',
+  'add',
+  'zoom-in',
+  'zoom-out',
+  'compass',
+  'toggle-analytics'
+])
 </script>
 
 <template>
@@ -30,7 +38,7 @@ const emit = defineEmits(['locate', 'add', 'zoom-in', 'zoom-out', 'compass'])
     </div>
 
     <!-- БЛОК ПО ЦЕНТРУ: Острівне меню -->
-    <div class="relative mx-auto flex items-center gap-6 px-6 h-16 bg-white/80 backdrop-blur-xl rounded-full shadow-2xl border border-white/40 pointer-events-auto">
+    <div class="relative mx-auto flex items-center gap-4 px-5 h-16 bg-white/80 backdrop-blur-xl rounded-full shadow-2xl border border-white/40 pointer-events-auto">
 
       <!-- Кнопка Компаса -->
       <button
@@ -41,7 +49,22 @@ const emit = defineEmits(['locate', 'add', 'zoom-in', 'zoom-out', 'compass'])
         <span class="material-symbols-outlined text-[26px]">explore</span>
       </button>
 
-      <!-- ГОЛОВНА КНОПКА ДОДАВАННЯ (Стабільне винесення вгору через абсолют) -->
+      <!-- Кнопка Аналітики (Оновлені стилі під стиль меню) -->
+      <button
+          type="button"
+          @click="emit('toggle-analytics')"
+          :class="[
+          'flex items-center justify-center w-10 h-10 rounded-full active:scale-95 transition-all cursor-pointer',
+          isAnalyticsActive
+            ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+            : 'text-slate-600 hover:bg-slate-200/50'
+        ]"
+          title="Аналітика доступності (400м)"
+      >
+        <span class="material-symbols-outlined text-[24px]">analytics</span>
+      </button>
+
+      <!-- ГОЛОВНА КНОПКА ДОДАВАННЯ -->
       <div class="w-16 h-16 relative flex justify-center">
         <button
             @click="emit('add')"

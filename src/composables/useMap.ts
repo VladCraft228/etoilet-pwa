@@ -1,22 +1,13 @@
 import { ref, shallowRef } from 'vue'
 import maplibregl from 'maplibre-gl'
 import type { Point } from 'geojson'
+import type {Toilet} from "../types.ts";
 
 export type LatLng = [number, number]
 export type LngLat = [number, number]
 
 export function useMap() {
     const map = shallowRef<maplibregl.Map | null>(null)
-
-    /**
-     * Тимчасова позиція користувача під час manual selection.
-     *
-     * ВАЖЛИВО:
-     * тут завжди [lat, lng].
-     *
-     * MapLibre використовує [lng, lat],
-     * але зовнішня логіка застосунку працює з [lat, lng].
-     */
     const temporaryClickedCoords = ref<LatLng | null>(null)
 
     const zoom = ref(13)
@@ -877,6 +868,134 @@ export function useMap() {
     }
 
     // ==========================================================
+    // GIS ANALYTICS LAYERS
+    // ==========================================================
+
+    const renderAnalyticsBuffers = (geojsonData: any) => {
+        if (!map.value) return
+
+        const sourceId = 'analytics-buffers'
+        const existingSource = map.value.getSource(sourceId) as maplibregl.GeoJSONSource
+
+        if (existingSource) {
+            existingSource.setData(geojsonData)
+            return
+        }
+
+        map.value.addSource(sourceId, {
+            type: 'geojson',
+            data: geojsonData
+        })
+
+        // Напівпрозоре заповнення полігону
+        map.value.addLayer(
+            {
+                id: 'analytics-buffers-fill',
+                type: 'fill',
+                source: sourceId,
+                paint: {
+                    'fill-color': '#6366f1',
+                    'fill-opacity': 0.18
+                }
+            },
+            'clusters' // 👈 Малюємо ШАР ПІД кластерами та точками туалетів
+        )
+
+        // Контур полігону
+        map.value.addLayer(
+            {
+                id: 'analytics-buffers-line',
+                type: 'line',
+                source: sourceId,
+                paint: {
+                    'line-color': '#4f46e5',
+                    'line-width': 1.5,
+                    'line-dasharray': [2, 2]
+                }
+            },
+            'clusters'
+        )
+    }
+
+    const clearAnalyticsBuffers = () => {
+        if (!map.value) return
+
+        if (map.value.getLayer('analytics-buffers-fill')) {
+            map.value.removeLayer('analytics-buffers-fill')
+        }
+        if (map.value.getLayer('analytics-buffers-line')) {
+            map.value.removeLayer('analytics-buffers-line')
+        }
+        if (map.value.getSource('analytics-buffers')) {
+            map.value.removeSource('analytics-buffers')
+        }
+    }
+
+// Отримати або створити GeoJSON шар віртуальних маркерів
+    const renderVirtualMarkers = (virtualToilets: Toilet[]) => {
+        if (!map.value) return
+
+        const sourceId = 'virtual-toilets-source'
+
+        const geojsonData = {
+            type: 'FeatureCollection',
+            features: virtualToilets
+                .filter((t) => t.longitude != null && t.latitude != null)
+                .map((t) => ({
+                    type: 'Feature',
+                    geometry: {
+                        type: 'Point',
+                        coordinates: [t.longitude!, t.latitude!]
+                    },
+                    properties: { id: t.id }
+                }))
+        }
+
+        const existingSource = map.value.getSource(sourceId) as maplibregl.GeoJSONSource
+
+        if (existingSource) {
+            existingSource.setData(geojsonData as any)
+            return
+        }
+
+        map.value.addSource(sourceId, {
+            type: 'geojson',
+            data: geojsonData as any
+        })
+
+        // Зовнішнє сяйво для віртуальної точки (помаранчеве)
+        map.value.addLayer({
+            id: 'virtual-toilets-halo',
+            type: 'circle',
+            source: sourceId,
+            paint: {
+                'circle-radius': 14,
+                'circle-color': '#f97316',
+                'circle-opacity': 0.35
+            }
+        })
+
+        // Основне ядро віртуальної точки
+        map.value.addLayer({
+            id: 'virtual-toilets-point',
+            type: 'circle',
+            source: sourceId,
+            paint: {
+                'circle-radius': 7,
+                'circle-color': '#f97316',
+                'circle-stroke-width': 2,
+                'circle-stroke-color': '#ffffff'
+            }
+        })
+    }
+
+    const clearVirtualMarkers = () => {
+        if (!map.value) return
+        if (map.value.getLayer('virtual-toilets-halo')) map.value.removeLayer('virtual-toilets-halo')
+        if (map.value.getLayer('virtual-toilets-point')) map.value.removeLayer('virtual-toilets-point')
+        if (map.value.getSource('virtual-toilets-source')) map.value.removeSource('virtual-toilets-source')
+    }
+    // ==========================================================
     // RETURN
     // ==========================================================
 
@@ -900,6 +1019,11 @@ export function useMap() {
         getCenterLatLng,
         // Manual selection
         syncTemporaryCoordsWithCenter,
-        clearTemporaryCoords
+        clearTemporaryCoords,
+        // GIS Analytics
+        renderAnalyticsBuffers,
+        clearAnalyticsBuffers,
+        renderVirtualMarkers,
+        clearVirtualMarkers
     }
 }

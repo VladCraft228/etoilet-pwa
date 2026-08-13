@@ -5,20 +5,21 @@ import {
   onMounted,
   onUnmounted,
   defineAsyncComponent,
-  nextTick
+  nextTick, computed
 } from 'vue'
 
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 // --- СЕРВІСИ ТА COMPOSABLES ---
-import { toiletService } from './services/toiletService'
-import { useGeolocation } from './composables/useGeolocation'
-import { useRouting } from './composables/useRouting'
-import { useMap } from './composables/useMap'
-import { useAuth } from './composables/useAuth'
-import { useRealtimeToilets } from './composables/useRealtimeToilets'
-import { useToast } from 'vue-toastification'
+import {toiletService} from './services/toiletService'
+import {useGeolocation} from './composables/useGeolocation'
+import * as turf from '@turf/turf'
+import {useRouting} from './composables/useRouting'
+import {useMap} from './composables/useMap'
+import {useAuth} from './composables/useAuth'
+import {useRealtimeToilets} from './composables/useRealtimeToilets'
+import {useToast} from 'vue-toastification'
 
 // --- БАЗОВІ КОМПОНЕНТИ ---
 import AppNavigation from './components/ui/AppNavigation.vue'
@@ -33,7 +34,9 @@ import LoginView from './components/views/LoginView.vue'
 import EditToiletModal from './components/features/EditToiletModal.vue'
 import RelocateOverlay from './components/map/RelocateOverlay.vue'
 
-import type { Toilet } from './types.ts'
+import type {Toilet} from './types.ts'
+import {useGisAnalytics} from "./analytics/composables/useGisAnalytics.ts";
+import AnalyticsPanel from "./analytics/components/AnalyticsPanel.vue";
 
 // --- ЛІНИВІ КОМПОНЕНТИ ---
 const LocationPrompt = defineAsyncComponent(
@@ -111,10 +114,113 @@ const {
 
   getCenterLatLng,
   syncTemporaryCoordsWithCenter,
-  clearTemporaryCoords
+  clearTemporaryCoords,
+  renderAnalyticsBuffers,
+  clearAnalyticsBuffers,
+  renderVirtualMarkers,
+  clearVirtualMarkers
 } = useMap()
 
+const {
+  isAnalyticsActive,
+  isSimulationMode,
+  bufferRadiusKm,
+  virtualToilets,
+  setBufferRadius,
+  addVirtualToilet,
+  removeVirtualToilet,
+  clearVirtualToilets,
+  getBuffersGeoJSON,
+  getSummaryStats,
+  downloadCsvReport
+} = useGisAnalytics()
+
 const toast = useToast()
+
+// ==========================================================
+// GIS ANALYTICS
+// ==========================================================
+
+const handleToggleAnalytics = () => {
+  isAnalyticsActive.value = !isAnalyticsActive.value
+
+  if (isAnalyticsActive.value) {
+    const geojson = getBuffersGeoJSON(approvedToilets.value)
+    renderAnalyticsBuffers(geojson)
+  } else {
+    clearAnalyticsBuffers()
+  }
+}
+
+watch(approvedToilets, (newToilets) => {
+  if (isAnalyticsActive.value) {
+    const geojson = getBuffersGeoJSON(newToilets)
+    renderAnalyticsBuffers(geojson)
+  }
+}, {deep: true})
+
+// Зміна радіуса
+const handleChangeRadius = (newRadiusKm: number) => {
+  setBufferRadius(newRadiusKm)
+  if (isAnalyticsActive.value) {
+    const geojson = getBuffersGeoJSON(approvedToilets.value)
+    renderAnalyticsBuffers(geojson)
+  }
+}
+
+// Пряма відстань між точкою юзера та фінішним туалетом
+const straightDistanceMeters = computed(() => {
+  // 1. Перевіряємо наявність обраної вбиральні
+  if (!targetToiletForRoute.value) return 0
+
+  const targetLng = targetToiletForRoute.value.longitude
+  const targetLat = targetToiletForRoute.value.latitude
+
+  if (targetLng == null || targetLat == null) return 0
+
+  // 2. Отримуємо координати користувача з маркеру MapLibre
+  if (!userLocationMarker) return 0
+
+  const userLngLat = userLocationMarker.getLngLat()
+  if (!userLngLat) return 0
+
+  // 3. Формуємо точки для Turf.js [lng, lat]
+  const p1 = turf.point([userLngLat.lng, userLngLat.lat])
+  const p2 = turf.point([targetLng, targetLat])
+
+  return turf.distance(p1, p2, { units: 'meters' })
+})
+
+// Реактивна статистика
+const gisStats = computed(() => getSummaryStats(approvedToilets.value))
+
+// Хендлер експорту CSV
+const handleExportCsv = () => {
+  downloadCsvReport(approvedToilets.value)
+}
+
+// Хендлер кліку по мапі (інтегрувати в існуючий обробник map.on('click'))
+const handleMapClickForAnalytics = (e: maplibregl.MapMouseEvent) => {
+  if (isAnalyticsActive.value && isSimulationMode.value) {
+    const { lng, lat } = e.lngLat
+    addVirtualToilet(lng, lat)
+  }
+}
+
+// Реактивне оновлення буферів та маркерів при зміні віртуальних точок
+watch(
+    [virtualToilets, bufferRadiusKm, isAnalyticsActive],
+    () => {
+      if (isAnalyticsActive.value) {
+        const geojson = getBuffersGeoJSON(approvedToilets.value)
+        renderAnalyticsBuffers(geojson)
+        renderVirtualMarkers(virtualToilets.value)
+      } else {
+        clearVirtualMarkers()
+      }
+    },
+    { deep: true }
+)
 
 // ==========================================================
 // UI / MODALS
@@ -144,6 +250,9 @@ const toiletToEdit =
 // ==========================================================
 // MAP STATE
 // ==========================================================
+
+const isGpsTrackingActive =
+    ref(false)
 
 const isFollowUserActive =
     ref(false)
@@ -506,53 +615,49 @@ const handlePopupRoute = () => {
 // ==========================================================
 
 const handleGpsLocation = () => {
-  showLocationPrompt.value =
-      false
+  showLocationPrompt.value = false
 
-  /**
-   * Якщо користувач був у manual mode,
-   * GPS має однозначно його скасувати.
-   */
-  if (
-      isManualSelectionMode.value
-  ) {
-    isManualSelectionMode.value =
-        false
-
+  if (isManualSelectionMode.value) {
+    isManualSelectionMode.value = false
     clearTemporaryCoords()
   }
 
-  /**
-   * Повторне натискання GPS,
-   * коли tracking уже активний,
-   * вимикає tracking.
-   */
-  if (
-      isFollowUserActive.value
-  ) {
-    stopTrackingLocation()
+  // 1. СЦЕНАРІЙ: GPS працює, але карта була зсунута вручну
+  // Клік просто повертає камеру на юзера і знову вмикає автослідування
+  if (isGpsTrackingActive.value && !isFollowUserActive.value) {
+    isFollowUserActive.value = true
 
-    isFollowUserActive.value =
-        false
-
+    if (userLocationMarker) {
+      const { lng, lat } = userLocationMarker.getLngLat()
+      flyToCoords(lng, lat, 16)
+    }
     return
   }
 
-  isFollowUserActive.value =
-      true
+  // 2. СЦЕНАРІЙ: GPS працює І карта вже стежить за юзером
+  // Повторний клік повністю вимикає GPS-трекінг
+  if (isGpsTrackingActive.value && isFollowUserActive.value) {
+    stopTrackingLocation()
+    isGpsTrackingActive.value = false
+    isFollowUserActive.value = false
+    return
+  }
+
+  // 3. СЦЕНАРІЙ: GPS був вимкнений — запускаємо
+  isGpsTrackingActive.value = true
+  isFollowUserActive.value = true
 
   startTrackingLocation(
       (lat, lng) => {
-        flyToCoords(
-            lng,
-            lat,
-            16
-        )
+        // Камеру центрируємо ТІЛЬКИ якщо активний режим слідування
+        if (isFollowUserActive.value) {
+          flyToCoords(lng, lat, 16)
+        }
       },
-
       () => {
-        isFollowUserActive.value =
-            false
+        // При помилці скидаємо обидва прапорці
+        isGpsTrackingActive.value = false
+        isFollowUserActive.value = false
       }
   )
 }
@@ -562,36 +667,17 @@ const handleGpsLocation = () => {
 // ==========================================================
 
 const handleManualLocation = () => {
-  showLocationPrompt.value =
-      false
+  showLocationPrompt.value = false
 
-  /**
-   * Manual mode завжди вимикає
-   * GPS tracking.
-   */
-  if (
-      isFollowUserActive.value
-  ) {
+  // Manual mode завжди вимикає GPS tracking повністю
+  if (isGpsTrackingActive.value) {
     stopTrackingLocation()
-
-    isFollowUserActive.value =
-        false
+    isGpsTrackingActive.value = false
+    isFollowUserActive.value = false
   }
 
-  /**
-   * Якщо вже були якісь старі
-   * тимчасові координати —
-   * не використовуємо їх.
-   */
   clearTemporaryCoords()
-
-  isManualSelectionMode.value =
-      true
-
-  /**
-   * Початковою точкою manual selection
-   * є поточний центр карти.
-   */
+  isManualSelectionMode.value = true
   syncTemporaryCoordsWithCenter()
 }
 
@@ -1558,21 +1644,13 @@ onMounted(async () => {
       currentScreen
   )
 
-  const mapInstance =
-      initMap(
-          'main-map',
-
-          () => {
-            if (
-                isFollowUserActive.value
-            ) {
-              stopTrackingLocation()
-
-              isFollowUserActive.value =
-                  false
-            }
-          }
-      )
+  const mapInstance = initMap(
+      'main-map',
+      () => {
+        // Відв'язуємо ТІЛЬКИ камеру, GPS продовжує працювати у фоні!
+        isFollowUserActive.value = false
+      }
+  )
 
   // ========================================================
   // MANUAL / TOILET TARGETING
@@ -1591,7 +1669,13 @@ onMounted(async () => {
   )
 
   mapInstance.on('click', (e) => {
-    // Реагуємо на клік ТІЛЬКИ якщо ми в режимі вибору місця для НОВОГО ТУАЛЕТУ
+// 1. Спеціальний режим ГІС-симуляції (додавання тестової вбиральні)
+    if (isAnalyticsActive.value && isSimulationMode.value) {
+      handleMapClickForAnalytics(e)
+      return
+    }
+
+    // 2. Реагуємо на клік ТІЛЬКИ якщо ми в режимі вибору місця для НОВОГО ТУАЛЕТУ
     if (isPickingToiletMode.value) {
       temporaryClickedCoords.value = [e.lngLat.lat, e.lngLat.lng]
       flyToCoords(e.lngLat.lng, e.lngLat.lat, mapInstance.getZoom())
@@ -1694,12 +1778,14 @@ onUnmounted(() => {
 
       <RouteInfoBanner
           :info="routeInfo"
+          :is-analytics-active="isAnalyticsActive"
+          :straight-distance="straightDistanceMeters"
           @close="
-          clearRoute();
-          targetToiletForRoute = null;
-          lastRoutedLocation = null;
-          pendingRouteLocation = null;
-        "
+    clearRoute();
+    targetToiletForRoute = null;
+    lastRoutedLocation = null;
+    pendingRouteLocation = null;
+  "
       />
 
       <!-- EDIT MODAL -->
@@ -1797,6 +1883,21 @@ onUnmounted(() => {
           @cancel="cancelRelocating"
       />
 
+      <AnalyticsPanel
+          v-if="isAnalyticsActive"
+          :buffer-radius-km="bufferRadiusKm"
+          :toilets="approvedToilets"
+          :stats="gisStats"
+          :is-simulation-mode="isSimulationMode"
+          :virtual-toilets="virtualToilets"
+          @change-radius="handleChangeRadius"
+          @export-csv="handleExportCsv"
+          @toggle-simulation="isSimulationMode = !isSimulationMode"
+          @remove-virtual="removeVirtualToilet"
+          @clear-virtual="clearVirtualToilets"
+          @close="handleToggleAnalytics"
+      />
+
       <MapControls
           v-show="
           !isManualSelectionMode &&
@@ -1827,6 +1928,8 @@ onUnmounted(() => {
               duration: 500
             })
           "
+          :is-analytics-active="isAnalyticsActive"
+          @toggle-analytics="handleToggleAnalytics"
       />
     </div>
 
