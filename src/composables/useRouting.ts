@@ -36,9 +36,6 @@ export function useRouting() {
         start: [number, number],
         end: [number, number]
     ): Promise<boolean> => {
-        // 💡 НЕ очищаємо activeRouteCoords.value тут,
-        // щоб лінія не зникала під час ходьби (фонового оновлення GPS)
-
         const straightDist = getStraightDistance(
             start[0],
             start[1],
@@ -51,16 +48,20 @@ export function useRouting() {
 
             if (!route || !route.coords.length) {
                 console.warn('OSRM не зміг побудувати маршрут')
-                // Якщо не вдалося побудувати новий, очищаємо старий
                 clearRoute()
                 return false
             }
 
-            // Захист від аномальних обходів (у 3.5 рази більше прямої)
-            if (route.distance > straightDist * MAX_ROUTE_FACTOR) {
-                console.warn('OSRM повернув занадто довгий маршрут:', {
+            // ПЕРЕВІРКА НА АНОМАЛЬНИЙ ОБХІД:
+            // Для коротких маршрутів (< 500м) будь-який обхід до 500м вважається нормальним пішохідним шляхом.
+            // Перевірка K > 3.5 включається тільки для маршрутів, довших за 500 метрів.
+            const isAbnormalDetour = route.distance > 500 && route.distance > straightDist * MAX_ROUTE_FACTOR
+
+            if (isAbnormalDetour) {
+                console.warn('OSRM повернув занадто довгий обхідний маршрут:', {
                     routeDistance: route.distance,
-                    straightDistance: straightDist
+                    straightDistance: straightDist,
+                    factor: (route.distance / straightDist).toFixed(2)
                 })
                 clearRoute()
                 return false
@@ -92,7 +93,7 @@ export function useRouting() {
                 (startGap > 2 ? startGap : 0) +
                 (endGap > 2 ? endGap : 0)
 
-            // 💡 Безшовна заміна старої лінії на нову:
+            // Безшовна заміна старої лінії на нову
             activeRouteCoords.value = finalCoords
             routeInfo.value = {
                 distance: Math.round(totalDistance),
