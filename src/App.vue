@@ -144,6 +144,8 @@ const toiletToEdit =
 // ==========================================================
 // MAP STATE
 // ==========================================================
+const isGpsTrackingActive =
+    ref(false)
 
 const isFollowUserActive =
     ref(false)
@@ -506,53 +508,50 @@ const handlePopupRoute = () => {
 // ==========================================================
 
 const handleGpsLocation = () => {
-  showLocationPrompt.value =
-      false
+  showLocationPrompt.value = false
 
-  /**
-   * Якщо користувач був у manual mode,
-   * GPS має однозначно його скасувати.
-   */
-  if (
-      isManualSelectionMode.value
-  ) {
-    isManualSelectionMode.value =
-        false
-
+  // Якщо користувач був у manual mode, скасовуємо його
+  if (isManualSelectionMode.value) {
+    isManualSelectionMode.value = false
     clearTemporaryCoords()
   }
 
-  /**
-   * Повторне натискання GPS,
-   * коли tracking уже активний,
-   * вимикає tracking.
-   */
-  if (
-      isFollowUserActive.value
-  ) {
-    stopTrackingLocation()
-
-    isFollowUserActive.value =
-        false
-
+  // СЦЕНАРІЙ 1: GPS працює, але юзер зрушив карту (камера відв'язана).
+  // Повертаємо камеру до юзера, НЕ зупиняючи фоновий GPS!
+  if (isGpsTrackingActive.value && !isFollowUserActive.value) {
+    isFollowUserActive.value = true
+    if (userLocationMarker) {
+      const { lng, lat } = userLocationMarker.getLngLat()
+      flyToCoords(lng, lat, 16)
+    }
     return
   }
 
-  isFollowUserActive.value =
-      true
+  // СЦЕНАРІЙ 2: Повторний клік, коли і GPS працює, і камера вже відцентрована.
+  // Повністю вимикаємо GPS.
+  if (isGpsTrackingActive.value && isFollowUserActive.value) {
+    stopTrackingLocation()
+    isGpsTrackingActive.value = false
+    isFollowUserActive.value = false
+    return
+  }
+
+  // СЦЕНАРІЙ 3: Запуск GPS з нуля
+  isGpsTrackingActive.value = true
+  isFollowUserActive.value = true
 
   startTrackingLocation(
       (lat, lng) => {
-        flyToCoords(
-            lng,
-            lat,
-            16
-        )
+        // Маркер та відстані у тобі оновлюються автоматично всередині startTrackingLocation,
+        // а камеру рухаємо ТІЛЬКИ якщо увімкнено слідування:
+        if (isFollowUserActive.value) {
+          flyToCoords(lng, lat, 16)
+        }
       },
-
       () => {
-        isFollowUserActive.value =
-            false
+        // Callback помилки GPS
+        isGpsTrackingActive.value = false
+        isFollowUserActive.value = false
       }
   )
 }
@@ -562,36 +561,17 @@ const handleGpsLocation = () => {
 // ==========================================================
 
 const handleManualLocation = () => {
-  showLocationPrompt.value =
-      false
+  showLocationPrompt.value = false
 
-  /**
-   * Manual mode завжди вимикає
-   * GPS tracking.
-   */
-  if (
-      isFollowUserActive.value
-  ) {
+  // Manual mode завжди вимикає GPS tracking повністю
+  if (isGpsTrackingActive.value) {
     stopTrackingLocation()
-
-    isFollowUserActive.value =
-        false
+    isGpsTrackingActive.value = false
+    isFollowUserActive.value = false
   }
 
-  /**
-   * Якщо вже були якісь старі
-   * тимчасові координати —
-   * не використовуємо їх.
-   */
   clearTemporaryCoords()
-
-  isManualSelectionMode.value =
-      true
-
-  /**
-   * Початковою точкою manual selection
-   * є поточний центр карти.
-   */
+  isManualSelectionMode.value = true
   syncTemporaryCoordsWithCenter()
 }
 
@@ -1566,8 +1546,6 @@ onMounted(async () => {
             if (
                 isFollowUserActive.value
             ) {
-              stopTrackingLocation()
-
               isFollowUserActive.value =
                   false
             }
