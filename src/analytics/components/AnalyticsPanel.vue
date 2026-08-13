@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Toilet } from '../../types'
+import type { AccessibilitySummary } from '../utils/accessibility'
 
 defineProps<{
   bufferRadiusKm: number
@@ -10,7 +11,8 @@ defineProps<{
     minNearestDistanceMeters: number
     maxNearestDistanceMeters: number
   }
-  // 👈 Додано нові пропи для симуляції
+  accessibilityStats?: AccessibilitySummary | null
+  isLoadingNetwork?: boolean // 👈 1. ЗМІНА: Додано проп завантаження OSRM
   isSimulationMode?: boolean
   virtualToilets?: Toilet[]
 }>()
@@ -19,7 +21,6 @@ const emit = defineEmits<{
   (e: 'change-radius', radiusKm: number): void
   (e: 'export-csv'): void
   (e: 'close'): void
-  // 👈 Додано нові еміти для симуляції
   (e: 'toggle-simulation'): void
   (e: 'remove-virtual', id: string): void
   (e: 'clear-virtual'): void
@@ -52,10 +53,10 @@ const radiusOptions = [
 
     <!-- Тіло панелі -->
     <div class="mt-3 space-y-3">
-      <!-- Вибір радіуса -->
+      <!-- Вибір буфера (Геометричний радіус) -->
       <div>
         <label class="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">
-          Радіус пішої доступності
+          Геометричний радіус покриття
         </label>
         <div class="grid grid-cols-3 gap-1.5">
           <button
@@ -125,6 +126,42 @@ const radiusOptions = [
             Очистити всі тестові точки
           </button>
         </div>
+      </div>
+
+      <!-- 👈 2. ЗМІНА: ОНОВЛЕНИЙ БЛОК МЕРЕЖЕВОЇ ДОСТУПНОСТІ (OSRM) -->
+      <div class="bg-indigo-50/90 p-3 rounded-xl border border-indigo-100 text-xs space-y-2">
+        <div class="flex items-center justify-between font-bold text-indigo-950">
+          <span class="flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-[18px] text-indigo-600">directions_walk</span>
+            Мережева доступність (OSRM)
+          </span>
+
+          <!-- Анімований спінер під час рохрахунку OSRM -->
+          <span v-if="isLoadingNetwork" class="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></span>
+          <span v-else-if="accessibilityStats" class="text-sm text-indigo-600 font-extrabold">
+            {{ accessibilityStats.accessible5MinPercent }}%
+          </span>
+        </div>
+
+        <template v-if="accessibilityStats && !isLoadingNetwork">
+          <div class="w-full bg-indigo-200/60 rounded-full h-2 overflow-hidden">
+            <div
+                class="bg-indigo-600 h-2 rounded-full transition-all duration-500"
+                :style="{ width: `${accessibilityStats.accessible5MinPercent}%` }"
+            ></div>
+          </div>
+
+          <div class="flex justify-between text-[11px] text-indigo-800">
+            <span>Покрито: <b>{{ accessibilityStats.accessible5MinCount }}</b> з {{ accessibilityStats.totalControlPoints }} локацій</span>
+            <span class="font-semibold">(≤ 5 хв пішки)</span>
+          </div>
+
+          <!-- Метрики чесного OSRM часу та коефіцієнта відхилення K -->
+          <div class="pt-1.5 border-t border-indigo-100/80 grid grid-cols-2 gap-2 text-[10px] text-indigo-900">
+            <div>Сер. час: <b>{{ accessibilityStats.avgWalkingTimeMins }} хв</b></div>
+            <div>Сер. K: <b>{{ accessibilityStats.avgCircuityFactor }}</b></div>
+          </div>
+        </template>
       </div>
 
       <!-- Блок зібраної статистики -->

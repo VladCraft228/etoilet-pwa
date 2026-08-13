@@ -118,18 +118,24 @@ const {
   renderAnalyticsBuffers,
   clearAnalyticsBuffers,
   renderVirtualMarkers,
-  clearVirtualMarkers
+  clearVirtualMarkers,
+  renderControlPointsLayer,
+  clearControlPointsLayer
 } = useMap()
 
 const {
   isAnalyticsActive,
   isSimulationMode,
+  isCalculatingNetwork,
   bufferRadiusKm,
   virtualToilets,
+  controlPoints,
+  accessibilityNetworkStats,
   setBufferRadius,
   addVirtualToilet,
   removeVirtualToilet,
   clearVirtualToilets,
+  recalculateNetworkAccessibility,
   getBuffersGeoJSON,
   getSummaryStats,
   downloadCsvReport
@@ -217,6 +223,27 @@ watch(
         renderVirtualMarkers(virtualToilets.value)
       } else {
         clearVirtualMarkers()
+      }
+    },
+    { deep: true }
+)
+
+// Обчислюємо доступність контрольних точок
+
+
+// Оновлюємо watch для підключення шару контрольних точок
+watch(
+    [virtualToilets, bufferRadiusKm, isAnalyticsActive],
+    async () => {
+      if (isAnalyticsActive.value) {
+        const geojson = getBuffersGeoJSON(approvedToilets.value)
+        renderAnalyticsBuffers(geojson)
+        renderVirtualMarkers(virtualToilets.value)
+        renderControlPointsLayer(controlPoints) // 👈 Малюємо контрольні точки
+        await recalculateNetworkAccessibility(approvedToilets.value)
+      } else {
+        clearVirtualMarkers()
+        clearControlPointsLayer() // 👈 Ховаємо контрольні точки
       }
     },
     { deep: true }
@@ -1888,6 +1915,8 @@ onUnmounted(() => {
           :buffer-radius-km="bufferRadiusKm"
           :toilets="approvedToilets"
           :stats="gisStats"
+          :accessibility-stats="accessibilityNetworkStats"
+          :is-loading-network="isCalculatingNetwork"
           :is-simulation-mode="isSimulationMode"
           :virtual-toilets="virtualToilets"
           @change-radius="handleChangeRadius"

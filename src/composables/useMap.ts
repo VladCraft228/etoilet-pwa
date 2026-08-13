@@ -1,6 +1,6 @@
-import { ref, shallowRef } from 'vue'
+import {ref, shallowRef} from 'vue'
 import maplibregl from 'maplibre-gl'
-import type { Point } from 'geojson'
+import type {Point} from 'geojson'
 import type {Toilet} from "../types.ts";
 
 export type LatLng = [number, number]
@@ -107,42 +107,42 @@ export function useMap() {
             ['linear'],
             ['zoom'],
 
-                10,
+            10,
+            [
+                'case',
                 [
-                    'case',
-                    [
-                        '==',
-                        ['get', 'id'],
-                        activeId || ''
-                    ],
-                    0.45 * 1.3,
-                    0.45
+                    '==',
+                    ['get', 'id'],
+                    activeId || ''
                 ],
+                0.45 * 1.3,
+                0.45
+            ],
 
-                14,
+            14,
+            [
+                'case',
                 [
-                    'case',
-                    [
-                        '==',
-                        ['get', 'id'],
-                        activeId || ''
-                    ],
-                    0.55 * 1.3,
-                    0.55
+                    '==',
+                    ['get', 'id'],
+                    activeId || ''
                 ],
+                0.55 * 1.3,
+                0.55
+            ],
 
-                17,
+            17,
+            [
+                'case',
                 [
-                    'case',
-                    [
-                        '==',
-                        ['get', 'id'],
-                        activeId || ''
-                    ],
-                    0.65 * 1.3,
-                    0.65
-                ]
+                    '==',
+                    ['get', 'id'],
+                    activeId || ''
+                ],
+                0.65 * 1.3,
+                0.65
             ]
+        ]
     }
 
     // ==========================================================
@@ -931,7 +931,7 @@ export function useMap() {
         }
     }
 
-// Отримати або створити GeoJSON шар віртуальних маркерів
+    // Отримати або створити GeoJSON шар віртуальних маркерів
     const renderVirtualMarkers = (virtualToilets: Toilet[]) => {
         if (!map.value) return
 
@@ -947,7 +947,7 @@ export function useMap() {
                         type: 'Point',
                         coordinates: [t.longitude!, t.latitude!]
                     },
-                    properties: { id: t.id }
+                    properties: {id: t.id}
                 }))
         }
 
@@ -995,6 +995,60 @@ export function useMap() {
         if (map.value.getLayer('virtual-toilets-point')) map.value.removeLayer('virtual-toilets-point')
         if (map.value.getSource('virtual-toilets-source')) map.value.removeSource('virtual-toilets-source')
     }
+
+    // ==========================================================
+    // CONTROL POINTS LAYERS
+    // ==========================================================
+
+    // Шар контрольних точок (Demand Points)
+    const renderControlPointsLayer = (controlPoints: any[]) => {
+        if (!map.value) return
+
+        const sourceId = 'control-points-source'
+        const geojsonData = {
+            type: 'FeatureCollection',
+            features: controlPoints.map((cp) => ({
+                type: 'Feature',
+                geometry: {
+                    type: 'Point',
+                    coordinates: [cp.longitude, cp.latitude]
+                },
+                properties: { name: cp.name, id: cp.id }
+            }))
+        }
+
+        const existingSource = map.value.getSource(sourceId) as maplibregl.GeoJSONSource
+
+        if (existingSource) {
+            existingSource.setData(geojsonData as any)
+            return
+        }
+
+        map.value.addSource(sourceId, {
+            type: 'geojson',
+            data: geojsonData as any
+        })
+
+        // Маркер контрольної точки
+        map.value.addLayer({
+            id: 'control-points-layer',
+            type: 'circle',
+            source: sourceId,
+            paint: {
+                'circle-radius': 6,
+                'circle-color': '#06b6d4', // Cyan/Teal
+                'circle-stroke-width': 2,
+                'circle-stroke-color': '#ffffff'
+            }
+        })
+    }
+
+    const clearControlPointsLayer = () => {
+        if (!map.value) return
+        if (map.value.getLayer('control-points-layer')) map.value.removeLayer('control-points-layer')
+        if (map.value.getSource('control-points-source')) map.value.removeSource('control-points-source')
+    }
+
     // ==========================================================
     // RETURN
     // ==========================================================
@@ -1013,17 +1067,24 @@ export function useMap() {
         flyToCoords,
         fitRouteBounds,
         clearToiletMarkers,
+
         // Coordinate helpers
         lngLatToLatLng,
         latLngToLngLat,
         getCenterLatLng,
+
         // Manual selection
         syncTemporaryCoordsWithCenter,
         clearTemporaryCoords,
+
         // GIS Analytics
         renderAnalyticsBuffers,
         clearAnalyticsBuffers,
         renderVirtualMarkers,
-        clearVirtualMarkers
+        clearVirtualMarkers,
+
+        // Control Points
+        renderControlPointsLayer,
+        clearControlPointsLayer
     }
 }
