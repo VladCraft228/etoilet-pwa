@@ -1,6 +1,6 @@
-import { ref, shallowRef } from 'vue'
+import {ref, shallowRef} from 'vue'
 import maplibregl from 'maplibre-gl'
-import type { Point } from 'geojson'
+import type {Point} from 'geojson'
 
 export type LatLng = [number, number]
 export type LngLat = [number, number]
@@ -67,6 +67,14 @@ export function useMap() {
      * Отримати поточний центр карти
      * у форматі застосунку [lat, lng].
      */
+
+    const getMapCenter = (): maplibregl.LngLat | null => {
+        if (!map.value) {
+            return null
+        }
+        return map.value.getCenter()
+    }
+
     const getCenterLatLng = (): LatLng | null => {
         if (!map.value) {
             return null
@@ -116,42 +124,42 @@ export function useMap() {
             ['linear'],
             ['zoom'],
 
-                10,
+            10,
+            [
+                'case',
                 [
-                    'case',
-                    [
-                        '==',
-                        ['get', 'id'],
-                        activeId || ''
-                    ],
-                    0.45 * 1.3,
-                    0.45
+                    '==',
+                    ['get', 'id'],
+                    activeId || ''
                 ],
+                0.45 * 1.3,
+                0.45
+            ],
 
-                14,
+            14,
+            [
+                'case',
                 [
-                    'case',
-                    [
-                        '==',
-                        ['get', 'id'],
-                        activeId || ''
-                    ],
-                    0.55 * 1.3,
-                    0.55
+                    '==',
+                    ['get', 'id'],
+                    activeId || ''
                 ],
+                0.55 * 1.3,
+                0.55
+            ],
 
-                17,
+            17,
+            [
+                'case',
                 [
-                    'case',
-                    [
-                        '==',
-                        ['get', 'id'],
-                        activeId || ''
-                    ],
-                    0.65 * 1.3,
-                    0.65
-                ]
+                    '==',
+                    ['get', 'id'],
+                    activeId || ''
+                ],
+                0.65 * 1.3,
+                0.65
             ]
+        ]
     }
 
     // ==========================================================
@@ -240,6 +248,13 @@ export function useMap() {
         if (!map.value) {
             return
         }
+
+        map.value.setPadding({
+            top: 0,
+            bottom: 0,
+            left: 0,
+            right: 0
+        })
 
         map.value.flyTo({
             center: [
@@ -897,6 +912,7 @@ export function useMap() {
         // Coordinate helpers
         lngLatToLatLng,
         latLngToLngLat,
+        getMapCenter,
         getCenterLatLng,
         // Manual selection
         syncTemporaryCoordsWithCenter,

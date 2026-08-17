@@ -41,7 +41,7 @@ export function useRealtimeToilets() {
 
                 if (shouldAlert && !hasNewData.value) {
                     hasNewData.value = true
-                    toast.warning('мапу було оновлено адміністратором! Оновіть сторінку.')
+                    toast.warning('Мапу було оновлено адміністратором! Оновіть сторінку.')
                 }
             })
             .subscribe()
