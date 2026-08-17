@@ -707,7 +707,13 @@ const handleFormSubmit = async (
           timeout: 5000
         }
     )
+
   } catch (error: any) {
+    console.error(
+        'Помилка додавання туалету:',
+        error
+    )
+
     toast.error(
         'Сталася помилка під час збереження.'
     )

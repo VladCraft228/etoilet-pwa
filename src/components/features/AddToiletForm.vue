@@ -42,9 +42,18 @@ const is24Hours = ref(false)
 
 // Очищення форми при закритті/відкритті або успішній відправці
 const resetForm = () => {
+  if (photoPreview.value) {
+    URL.revokeObjectURL(
+        photoPreview.value
+    )
+  }
+
   photoPreview.value = null
   rawFile.value = null
-  if (fileInput.value) fileInput.value.value = ''
+
+  if (fileInput.value) {
+    fileInput.value.value = ''
+  }
 
   form.type = 'public'
   form.has_washbasin = false
@@ -55,7 +64,6 @@ const resetForm = () => {
   form.comment = ''
   form.stalls_count = 1
   form.urinals_count = 0
-
   openTime.value = ''
   closeTime.value = ''
   is24Hours.value = false
@@ -69,27 +77,65 @@ watch(() => props.isOpen, (newVal) => {
 })
 
 const handlePhotoUpload = async (event: Event) => {
-  const target = event.target as HTMLInputElement
-  if (target.files && target.files[0]) {
-    const originalFile = target.files[0]
+  const target =
+      event.target as HTMLInputElement
 
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      photoPreview.value = e.target?.result as string
-    }
-    reader.readAsDataURL(originalFile)
+  const originalFile =
+      target.files?.[0]
 
-    try {
-      const options = {
-        maxSizeMB: 0.3,
-        maxWidthOrHeight: 1024,
-        useWebWorker: true
-      }
-      rawFile.value = await imageCompression(originalFile, options)
-    } catch (error) {
-      console.error('Помилка стиснення зображення:', error)
-      rawFile.value = originalFile
-    }
+  if (!originalFile) {
+    return
+  }
+
+  // Якщо користувач вибрав інше фото,
+  // звільняємо попередній preview.
+  if (photoPreview.value) {
+    URL.revokeObjectURL(
+        photoPreview.value
+    )
+
+    photoPreview.value = null
+  }
+
+  try {
+    const compressedFile =
+        await imageCompression(
+            originalFile,
+            {
+              maxSizeMB: 0.3,
+              maxWidthOrHeight: 1024,
+
+              // Важливо для iOS:
+              // не створюємо додатковий Web Worker.
+              useWebWorker: false
+            }
+        )
+
+    rawFile.value =
+        compressedFile
+
+    // Preview показуємо вже стиснутого
+    // файла, а не оригінального.
+    photoPreview.value =
+        URL.createObjectURL(
+            compressedFile
+        )
+
+  } catch (error) {
+    console.error(
+        'Помилка стиснення зображення:',
+        error
+    )
+
+    // Якщо compression не вдалося,
+    // використовуємо оригінал.
+    rawFile.value =
+        originalFile
+
+    photoPreview.value =
+        URL.createObjectURL(
+            originalFile
+        )
   }
 }
 
@@ -124,8 +170,6 @@ const submitForm = () => {
     coords: props.coords,
     imageFile: rawFile.value
   })
-
-  handleClose()
 }
 </script>
 
