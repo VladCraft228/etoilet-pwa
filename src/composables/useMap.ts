@@ -58,6 +58,14 @@ export function useMap() {
      * Отримати поточний центр карти
      * у форматі застосунку [lat, lng].
      */
+
+    const getMapCenter = (): maplibregl.LngLat | null => {
+        if (!map.value) {
+            return null
+        }
+        return map.value.getCenter()
+    }
+
     const getCenterLatLng = (): LatLng | null => {
         if (!map.value) {
             return null
@@ -231,6 +239,13 @@ export function useMap() {
         if (!map.value) {
             return
         }
+
+        map.value.setPadding({
+            top: 0,
+            bottom: 0,
+            left: 0,
+            right: 0
+        })
 
         map.value.flyTo({
             center: [
@@ -1071,6 +1086,7 @@ export function useMap() {
         // Coordinate helpers
         lngLatToLatLng,
         latLngToLngLat,
+        getMapCenter,
         getCenterLatLng,
 
         // Manual selection

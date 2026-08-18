@@ -103,16 +103,13 @@ const {
 
 const {
   map,
-  center,
   temporaryClickedCoords,
-
   initMap,
   flyToCoords,
   fitRouteBounds,
   updateToiletsClustered,
   setSelectedToiletId,
 
-  getCenterLatLng,
   syncTemporaryCoordsWithCenter,
   clearTemporaryCoords,
   renderAnalyticsBuffers,
@@ -311,6 +308,8 @@ const targetToiletForRoute =
 // ==========================================================
 
 const ROUTE_REBUILD_DISTANCE = 25
+const ARRIVAL_DIRECT_DISTANCE = 15
+const ARRIVAL_ROUTE_DISTANCE = 10
 
 const lastRoutedLocation =
     ref<[number, number] | null>(null)
@@ -400,6 +399,53 @@ function getDistanceMeters(
           Math.sqrt(1 - value)
       )
   )
+}
+
+const getRemainingRouteDistance = (
+    currentLocation: [number, number],
+    routeCoords: [number, number][]
+): number => {
+  if (routeCoords.length < 2) {
+    return Infinity
+  }
+
+  // Знаходимо найближчу точку поточного маршруту
+  let closestIndex = 0
+  let closestDistance = Infinity
+
+  for (
+      let i = 0;
+      i < routeCoords.length;
+      i++
+  ) {
+    const distance =
+        getDistanceMeters(
+            currentLocation,
+            routeCoords[i]
+        )
+
+    if (distance < closestDistance) {
+      closestDistance = distance
+      closestIndex = i
+    }
+  }
+
+  // Від найближчої точки маршруту до його кінця
+  let remainingDistance = closestDistance
+
+  for (
+      let i = closestIndex;
+      i < routeCoords.length - 1;
+      i++
+  ) {
+    remainingDistance +=
+        getDistanceMeters(
+            routeCoords[i],
+            routeCoords[i + 1]
+        )
+  }
+
+  return remainingDistance
 }
 
 // ==========================================================
@@ -582,12 +628,7 @@ const selectToiletById = (
           16
       ),
 
-      padding: {
-        top: 350,
-        bottom: 50,
-        left: 20,
-        right: 20
-      },
+      offset: [0, 150],
 
       speed: 1.2
     })
@@ -603,10 +644,10 @@ const selectToiletById = (
           16
       ),
 
-      padding: {
-        bottom:
-            window.innerHeight * 0.4
-      },
+      offset: [
+        0,
+        -window.innerHeight * 0.2
+      ],
 
       speed: 1.2
     })
@@ -644,16 +685,16 @@ const handlePopupRoute = () => {
 const handleGpsLocation = () => {
   showLocationPrompt.value = false
 
+  // Якщо користувач був у manual mode, скасовуємо його
   if (isManualSelectionMode.value) {
     isManualSelectionMode.value = false
     clearTemporaryCoords()
   }
 
-  // 1. СЦЕНАРІЙ: GPS працює, але карта була зсунута вручну
-  // Клік просто повертає камеру на юзера і знову вмикає автослідування
+  // СЦЕНАРІЙ 1: GPS працює, але юзер зрушив карту (камера відв'язана).
+  // Повертаємо камеру до юзера, НЕ зупиняючи фоновий GPS!
   if (isGpsTrackingActive.value && !isFollowUserActive.value) {
     isFollowUserActive.value = true
-
     if (userLocationMarker) {
       const { lng, lat } = userLocationMarker.getLngLat()
       flyToCoords(lng, lat, 16)
@@ -661,8 +702,8 @@ const handleGpsLocation = () => {
     return
   }
 
-  // 2. СЦЕНАРІЙ: GPS працює І карта вже стежить за юзером
-  // Повторний клік повністю вимикає GPS-трекінг
+  // СЦЕНАРІЙ 2: Повторний клік, коли і GPS працює, і камера вже відцентрована.
+  // Повністю вимикаємо GPS.
   if (isGpsTrackingActive.value && isFollowUserActive.value) {
     stopTrackingLocation()
     isGpsTrackingActive.value = false
@@ -670,19 +711,20 @@ const handleGpsLocation = () => {
     return
   }
 
-  // 3. СЦЕНАРІЙ: GPS був вимкнений — запускаємо
+  // СЦЕНАРІЙ 3: Запуск GPS з нуля
   isGpsTrackingActive.value = true
   isFollowUserActive.value = true
 
   startTrackingLocation(
       (lat, lng) => {
-        // Камеру центрируємо ТІЛЬКИ якщо активний режим слідування
+        // Маркер та відстані у тобі оновлюються автоматично всередині startTrackingLocation,
+        // а камеру рухаємо ТІЛЬКИ якщо увімкнено слідування:
         if (isFollowUserActive.value) {
           flyToCoords(lng, lat, 16)
         }
       },
       () => {
-        // При помилці скидаємо обидва прапорці
+        // Callback помилки GPS
         isGpsTrackingActive.value = false
         isFollowUserActive.value = false
       }
@@ -763,20 +805,15 @@ const confirmToiletLocation = () => {
     return
   }
 
-  const coords =
-      temporaryClickedCoords.value ??
-      getCenterLatLng()
+  const mapCenter = map.value.getCenter()
 
-  if (!coords) {
+  if (!mapCenter) {
     return
   }
 
-  const [lat, lng] =
-      coords
-
   selectedToiletCoords.value = [
-    lat,
-    lng
+    mapCenter.lat,
+    mapCenter.lng
   ]
 
   clearTemporaryCoords()
@@ -805,7 +842,13 @@ const handleFormSubmit = async (
           timeout: 5000
         }
     )
+
   } catch (error: any) {
+    console.error(
+        'Помилка додавання туалету:',
+        error
+    )
+
     toast.error(
         'Сталася помилка під час збереження.'
     )
@@ -1115,17 +1158,18 @@ const handleTeleportFromAdmin =
             )
 
         el.className =
-            'relative flex flex-col items-center justify-end w-12 h-16 cursor-pointer'
+            'relative flex items-center justify-center w-10 h-10 cursor-pointer'
 
         el.innerHTML = `
-          <div class="flex items-center justify-center w-10 h-10 bg-amber-500 text-white rounded-full shadow-[0_0_15px_rgba(245,158,11,0.6)] border-2 border-white animate-bounce relative z-50">
-            <span class="material-symbols-outlined text-[24px]">
-              location_on
-            </span>
-          </div>
-
-          <div class="absolute bottom-1 left-1/2 -translate-x-1/2 w-5 h-1.5 bg-black/40 rounded-[100%] blur-[1px]"></div>
-        `
+  <div class="flex items-center justify-center w-10 h-10
+              bg-amber-500 text-white rounded-full
+              shadow-[0_0_15px_rgba(245,158,11,0.6)]
+              border-2 border-white relative z-50">
+    <span class="material-symbols-outlined text-[24px]">
+      location_on
+    </span>
+  </div>
+`
 
         const popupNode =
             document.createElement(
@@ -1136,30 +1180,40 @@ const handleTeleportFromAdmin =
             'p-3 flex flex-col items-center min-w-[220px] font-sans gap-2'
 
         popupNode.innerHTML = `
-          <span class="text-[10px] font-bold text-amber-600 bg-amber-50 px-2.5 py-1 rounded-md border border-amber-100 uppercase tracking-wider mb-1">
-            На перевірці
-          </span>
+  <span class="text-[10px] font-bold text-amber-600 bg-amber-50 px-2.5 py-1 rounded-md border border-amber-100 uppercase tracking-wider mb-1">
+    На перевірці
+  </span>
 
-          <button
-            id="route-btn"
-            class="w-full flex items-center justify-center gap-1.5 bg-indigo-600 text-white text-xs font-bold py-2 rounded-lg hover:bg-indigo-700 active:scale-95 transition-all shadow-sm"
-          >
-            <span class="material-symbols-outlined text-[16px]">
-              directions_walk
-            </span>
-            Маршрут сюди
-          </button>
+  <button
+    id="route-btn"
+    class="w-full flex items-center justify-center gap-1.5 bg-indigo-600 text-white text-xs font-bold py-2 rounded-lg hover:bg-indigo-700 active:scale-95 transition-all shadow-sm"
+  >
+    <span class="material-symbols-outlined text-[16px]">
+      directions_walk
+    </span>
+    Маршрут сюди
+  </button>
 
-          <button
-            id="return-admin-btn"
-            class="w-full flex items-center justify-center gap-1.5 bg-slate-100 text-slate-700 text-xs font-bold py-2 rounded-lg hover:bg-slate-200 active:scale-95 transition-all border border-slate-200"
-          >
-            <span class="material-symbols-outlined text-[16px]">
-              admin_panel_settings
-            </span>
-            Повернутися до заявки
-          </button>
-        `
+  <button
+    id="relocate-btn"
+    class="w-full flex items-center justify-center gap-1.5 bg-amber-50 text-amber-700 text-xs font-bold py-2 rounded-lg hover:bg-amber-100 active:scale-95 transition-all border border-amber-200"
+  >
+    <span class="material-symbols-outlined text-[16px]">
+      gps_fixed
+    </span>
+    Перемістити мітку
+  </button>
+
+  <button
+    id="return-admin-btn"
+    class="w-full flex items-center justify-center gap-1.5 bg-slate-100 text-slate-700 text-xs font-bold py-2 rounded-lg hover:bg-slate-200 active:scale-95 transition-all border border-slate-200"
+  >
+    <span class="material-symbols-outlined text-[16px]">
+      admin_panel_settings
+    </span>
+    Повернутися до заявки
+  </button>
+`
 
         const btnRoute =
             popupNode.querySelector(
@@ -1169,13 +1223,51 @@ const handleTeleportFromAdmin =
         btnRoute?.addEventListener(
             'click',
             () => {
+              const coords =
+                  pendingReviewMarker?.getLngLat()
+
+              if (!coords) {
+                return
+              }
+
               targetToiletForRoute.value = {
-                latitude: lat,
-                longitude: lng
+                latitude: coords.lat,
+                longitude: coords.lng
               }
 
               showRouteChoiceModal.value =
                   true
+            }
+        )
+
+        const btnRelocate =
+            popupNode.querySelector(
+                '#relocate-btn'
+            )
+
+        btnRelocate?.addEventListener(
+            'click',
+            () => {
+              if (!map.value) {
+                return
+              }
+
+              // Закриваємо popup, але сам marker залишаємо
+              // на карті — після збереження ми його просто переставимо.
+              pendingReviewMarker?.getPopup()?.remove()
+
+              isRelocatingMode.value =
+                  true
+
+              relocatingToiletId.value =
+                  id
+
+              // Переміщуємо камеру до поточної позиції заявки.
+              flyToCoords(
+                  lng,
+                  lat,
+                  17
+              )
             }
         )
 
@@ -1209,7 +1301,7 @@ const handleTeleportFromAdmin =
         pendingReviewMarker =
             new maplibregl.Marker({
               element: el,
-              anchor: 'bottom'
+              anchor: 'center'
             })
                 .setLngLat([
                   lng,
@@ -1320,14 +1412,17 @@ const confirmRelocating =
     async () => {
       if (
           !relocatingToiletId.value
+          || !map.value
       ) {
         return
       }
 
-      const [
-        lng,
-        lat
-      ] = center.value
+      const mapCenter = map.value.getCenter()
+      if (!mapCenter) {
+        return
+      }
+      const lat = mapCenter.lat
+      const lng = mapCenter.lng
 
       try {
         await toiletService.updateToiletCoordinates(
@@ -1471,6 +1566,53 @@ watch(
         lat,
         lng
       ]
+
+      const targetCoords =
+          getTargetRouteCoords()
+
+      if (!targetCoords) {
+        return
+      }
+
+      const directDistance =
+          getDistanceMeters(
+              currentLocation,
+              targetCoords
+          )
+
+      const remainingRouteDistance =
+          getRemainingRouteDistance(
+              currentLocation,
+              activeRouteCoords.value
+          )
+
+      const hasArrived =
+          directDistance <=
+          ARRIVAL_DIRECT_DISTANCE ||
+          remainingRouteDistance <=
+          ARRIVAL_ROUTE_DISTANCE
+
+      if (hasArrived) {
+        clearRoute()
+
+        targetToiletForRoute.value =
+            null
+
+        lastRoutedLocation.value =
+            null
+
+        pendingRouteLocation.value =
+            null
+
+        toast.success(
+            '🎉 Ви прибули! Вбиральня вже поруч.',
+            {
+              timeout: 5000
+            }
+        )
+
+        return
+      }
 
       if (
           !lastRoutedLocation.value
@@ -1671,13 +1813,19 @@ onMounted(async () => {
       currentScreen
   )
 
-  const mapInstance = initMap(
-      'main-map',
-      () => {
-        // Відв'язуємо ТІЛЬКИ камеру, GPS продовжує працювати у фоні!
-        isFollowUserActive.value = false
-      }
-  )
+  const mapInstance =
+      initMap(
+          'main-map',
+
+          () => {
+            if (
+                isFollowUserActive.value
+            ) {
+              isFollowUserActive.value =
+                  false
+            }
+          }
+      )
 
   // ========================================================
   // MANUAL / TOILET TARGETING

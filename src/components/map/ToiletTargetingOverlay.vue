@@ -35,25 +35,18 @@ const emit = defineEmits<{
     </div>
 
     <!-- Центральний маркер -->
-    <div
-        class="absolute inset-0 flex items-center justify-center
-             pointer-events-none"
-    >
-      <div class="relative flex items-center justify-center -mt-10">
-        <div
-            class="absolute bottom-0 w-5 h-2
-                 bg-black/20 rounded-full blur-[2px]"
-        />
-
-        <span
-            class="material-symbols-outlined
-                 text-[42px] text-emerald-600
-                 drop-shadow-[0_2px_4px_rgba(0,0,0,0.35)]
-                 relative"
-        >
-          location_on
-        </span>
-      </div>
+    <div class="absolute inset-0 pointer-events-none">
+  <span
+      class="material-symbols-outlined
+           absolute left-1/2 top-1/2
+           -translate-x-1/2 -translate-y-1/2
+           text-[42px]
+           leading-none
+           text-emerald-600
+           drop-shadow-lg"
+  >
+    gps_fixed
+  </span>
     </div>
 
     <!-- Нижня панель -->

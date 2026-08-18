@@ -52,7 +52,7 @@ export function useRouting() {
                 return false
             }
 
-            // 💡 ГНУЧКА ПЕРЕВІРКА НА АНОМАЛЬНИЙ ОБХІД:
+            // ПЕРЕВІРКА НА АНОМАЛЬНИЙ ОБХІД:
             // Для коротких маршрутів (< 500м) будь-який обхід до 500м вважається нормальним пішохідним шляхом.
             // Перевірка K > 3.5 включається тільки для маршрутів, довших за 500 метрів.
             const isAbnormalDetour = route.distance > 500 && route.distance > straightDist * MAX_ROUTE_FACTOR
