@@ -73,7 +73,11 @@ const OSRM_BASE_URL =
  * 3 — хороший компроміс між точністю
  * та кількістю запитів.
  */
-const MAX_CANDIDATES = 3
+export const DEFAULT_MAX_CANDIDATES = 3
+
+export interface AccessibilityOptions {
+    maxCandidates?: number
+}
 
 /**
  * Публічний сервер FOSSGIS має обмеження
@@ -232,11 +236,18 @@ async function fetchOsrmNetworkRoute(
  *    - Circuity Factor;
  *    - доступність за 5 / 10 хв.
  */
-export async function
-evaluateControlPointsAccessibilityNetwork(
+export async function evaluateControlPointsAccessibilityNetwork(
     controlPoints: ControlPoint[],
-    toilets: Toilet[]
+    toilets: Toilet[],
+    options: AccessibilityOptions = {}
 ): Promise<AccessibilitySummary> {
+    const maxCandidates = Math.max(
+        1,
+        Math.floor(
+            options.maxCandidates ??
+            DEFAULT_MAX_CANDIDATES
+        )
+    )
     const validToilets =
         toilets.filter(
             toilet =>
@@ -337,7 +348,7 @@ evaluateControlPointsAccessibilityNetwork(
         const candidates =
             sortedCandidates.slice(
                 0,
-                MAX_CANDIDATES
+                maxCandidates
             )
 
         // --------------------------------------------------
@@ -691,4 +702,75 @@ evaluateControlPointsAccessibilityNetwork(
 
         results
     }
+}
+
+export function exportAccessibilityResultsCsv(
+    summary: AccessibilitySummary,
+    maxCandidates: number = 3
+) {
+    let csv = '\uFEFF'
+
+    csv +=
+        'ID;Назва;Категорія;Широта;Довгота;' +
+        'Найближча вбиральня;' +
+        'Евклідова відстань, м;' +
+        'Пішохідна відстань, м;' +
+        'Пішохідний час, с;' +
+        'Пішохідний час, хв;' +
+        'Circuity Factor;' +
+        'Доступність 5 хв;' +
+        'Доступність 10 хв;' +
+        'Проаналізовано\n'
+
+    for (const result of summary.results) {
+        const point = result.point
+        const toiletName =
+            result.nearestToilet?.address ??
+            result.nearestToilet?.id ??
+            ''
+        const walkingTimeMin = Number(
+            (result.walkingDurationSeconds / 60).toFixed(1)
+        )
+
+        csv += [
+            point.id,
+            `"${point.name.replace(/"/g, '""')}"`,
+            point.category,
+            point.latitude,
+            point.longitude,
+            `"${String(toiletName).replace(/"/g, '""')}"`,
+            result.straightDistanceMeters,
+            result.walkingDistanceMeters,
+            result.walkingDurationSeconds,
+            walkingTimeMin,
+            result.circuityFactor,
+            result.isAccessible5Min ? 'Так' : 'Ні',
+            result.isAccessible10Min ? 'Так' : 'Ні',
+            result.analyzed ? 'Так' : 'Ні'
+        ].join(';') + '\n'
+    }
+
+    csv += '\n'
+    csv += `MAX_CANDIDATES;${maxCandidates}\n`
+    csv += `Всього контрольних точок;${summary.totalControlPoints}\n`
+    csv += `Проаналізовано;${summary.analyzedControlPoints}\n`
+    csv += `Помилки маршрутизації;${summary.failedControlPoints}\n`
+    csv += `Покриття 5 хв;${summary.accessible5MinPercent}%\n`
+    csv += `Покриття 10 хв;${summary.accessible10MinPercent}%\n`
+    csv += `Середня мережева відстань;${summary.avgWalkingDistanceMeters} м\n`
+    csv += `Медіанна мережева відстань;${summary.medianWalkingDistanceMeters} м\n`
+    csv += `Середній час;${summary.avgWalkingTimeMins} хв\n`
+    csv += `Медіанний час;${summary.medianWalkingTimeMins} хв\n`
+    csv += `Середній Circuity;${summary.avgCircuityFactor}\n`
+    csv += `Медіанний Circuity;${summary.medianCircuityFactor}\n`
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `accessibility_baseline_${maxCandidates}_candidates.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
 }

@@ -12,7 +12,7 @@ defineProps<{
     maxNearestDistanceMeters: number
   }
   accessibilityStats?: AccessibilitySummary | null
-  isLoadingNetwork?: boolean // 👈 1. ЗМІНА: Додано проп завантаження OSRM
+  isLoadingNetwork?: boolean
   isSimulationMode?: boolean
   virtualToilets?: Toilet[]
 }>()
@@ -20,10 +20,12 @@ defineProps<{
 const emit = defineEmits<{
   (e: 'change-radius', radiusKm: number): void
   (e: 'export-csv'): void
+  (e: 'export-accessibility-csv'): void
   (e: 'close'): void
   (e: 'toggle-simulation'): void
   (e: 'remove-virtual', id: string): void
   (e: 'clear-virtual'): void
+  (e: 'calculate-network'): void // 👈 Додано подію ручного розрахунку
 }>()
 
 const radiusOptions = [
@@ -79,7 +81,7 @@ const radiusOptions = [
         </div>
       </div>
 
-      <!-- БЛОК СИМУЛЯЦІЇ (ЩО ЯКЩО) -->
+      <!-- БЛОК СИМУЛЯЦІЇ -->
       <div class="pt-2 border-t border-slate-100 space-y-2">
         <div class="flex items-center justify-between">
           <span class="text-xs font-bold text-slate-700 flex items-center gap-1.5">
@@ -100,7 +102,6 @@ const radiusOptions = [
           </button>
         </div>
 
-        <!-- Перелік доданих віртуальних точок -->
         <div v-if="virtualToilets && virtualToilets.length > 0" class="space-y-1.5 max-h-28 overflow-y-auto pr-1">
           <div
               v-for="(vt, idx) in virtualToilets"
@@ -128,7 +129,7 @@ const radiusOptions = [
         </div>
       </div>
 
-      <!-- 👈 2. ЗМІНА: ОНОВЛЕНИЙ БЛОК МЕРЕЖЕВОЇ ДОСТУПНОСТІ (OSRM) -->
+      <!-- БЛОК МЕРЕЖЕВОЇ ДОСТУПНОСТІ (OSRM) -->
       <div class="bg-indigo-50/90 p-3 rounded-xl border border-indigo-100 text-xs space-y-2">
         <div class="flex items-center justify-between font-bold text-indigo-950">
           <span class="flex items-center gap-1.5">
@@ -136,14 +137,26 @@ const radiusOptions = [
             Мережева доступність (OSRM)
           </span>
 
-          <!-- Анімований спінер під час рохрахунку OSRM -->
           <span v-if="isLoadingNetwork" class="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></span>
           <span v-else-if="accessibilityStats" class="text-sm text-indigo-600 font-extrabold">
             {{ accessibilityStats.accessible5MinPercent }}%
           </span>
         </div>
 
-        <template v-if="accessibilityStats && !isLoadingNetwork">
+        <!-- Кнопка ручного запуску (якщо ще не рахували) -->
+        <div v-if="!accessibilityStats && !isLoadingNetwork" class="pt-1">
+          <button
+              type="button"
+              @click="emit('calculate-network')"
+              class="w-full py-1.5 px-3 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-semibold rounded-lg text-xs transition-all shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <span class="material-symbols-outlined text-[16px]">play_arrow</span>
+            <span>Розрахувати доступність</span>
+          </button>
+        </div>
+
+        <!-- Результати розрахунку -->
+        <template v-else-if="accessibilityStats && !isLoadingNetwork">
           <div class="w-full bg-indigo-200/60 rounded-full h-2 overflow-hidden">
             <div
                 class="bg-indigo-600 h-2 rounded-full transition-all duration-500"
@@ -152,19 +165,40 @@ const radiusOptions = [
           </div>
 
           <div class="flex justify-between text-[11px] text-indigo-800">
-            <span>Покрито: <b>{{ accessibilityStats.accessible5MinCount }}</b> з {{ accessibilityStats.totalControlPoints }} локацій</span>
-            <span class="font-semibold">(≤ 5 хв пішки)</span>
+            <span>Покрито: <b>{{ accessibilityStats.accessible5MinCount }}</b> з {{ accessibilityStats.totalControlPoints }}</span>
+            <span class="font-semibold">(≤ 5 хв)</span>
           </div>
 
-          <!-- Метрики чесного OSRM часу та коефіцієнта відхилення K -->
           <div class="pt-1.5 border-t border-indigo-100/80 grid grid-cols-2 gap-2 text-[10px] text-indigo-900">
             <div>Сер. час: <b>{{ accessibilityStats.avgWalkingTimeMins }} хв</b></div>
             <div>Сер. K: <b>{{ accessibilityStats.avgCircuityFactor }}</b></div>
           </div>
+
+          <!-- Кнопки дій OSRM -->
+          <div class="grid grid-cols-2 gap-1.5 pt-1">
+            <button
+                type="button"
+                @click="emit('calculate-network')"
+                class="py-1 px-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-medium rounded-lg text-[10px] transition-colors flex items-center justify-center gap-1 cursor-pointer"
+            >
+              <span class="material-symbols-outlined text-[13px]">refresh</span>
+              <span>Оновити</span>
+            </button>
+
+            <button
+                type="button"
+                @click="emit('export-accessibility-csv')"
+                class="py-1 px-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg text-[10px] transition-colors flex items-center justify-center gap-1 cursor-pointer shadow-sm"
+                title="Завантажити датасет контрольних точок"
+            >
+              <span class="material-symbols-outlined text-[13px]">table_view</span>
+              <span>OSRM CSV</span>
+            </button>
+          </div>
         </template>
       </div>
 
-      <!-- Блок зібраної статистики -->
+      <!-- Просторові метрики -->
       <div class="bg-slate-50/80 p-3 rounded-xl border border-slate-100 space-y-2 text-xs">
         <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
           Просторові метрики

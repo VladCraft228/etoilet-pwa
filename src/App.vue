@@ -133,9 +133,11 @@ const {
   removeVirtualToilet,
   clearVirtualToilets,
   recalculateNetworkAccessibility,
+  runAccessibilityBenchmark,
   getBuffersGeoJSON,
   getSummaryStats,
-  downloadCsvReport
+  downloadCsvReport,
+  downloadAccessibilityCsvReport
 } = useGisAnalytics()
 
 const toast = useToast()
@@ -237,7 +239,6 @@ watch(
         renderAnalyticsBuffers(geojson)
         renderVirtualMarkers(virtualToilets.value)
         renderControlPointsLayer(controlPoints) // 👈 Малюємо контрольні точки
-        await recalculateNetworkAccessibility(approvedToilets.value)
       } else {
         clearVirtualMarkers()
         clearControlPointsLayer() // 👈 Ховаємо контрольні точки
@@ -245,6 +246,35 @@ watch(
     },
     { deep: true }
 )
+
+// ==========================================================
+// GIS BENCHMARK (DEV ONLY)
+// ==========================================================
+
+const runBenchmark = async () => {
+  const results = await runAccessibilityBenchmark(approvedToilets.value)
+
+  console.table(
+      results.map(result => ({
+        MAX_CANDIDATES: result.maxCandidates,
+        '5 min (%)': result.summary.accessible5MinPercent,
+        '10 min (%)': result.summary.accessible10MinPercent,
+        'Avg walk (m)': result.summary.avgWalkingDistanceMeters,
+        'Median walk (m)': result.summary.medianWalkingDistanceMeters,
+        'Avg time (min)': result.summary.avgWalkingTimeMins,
+        'Median time (min)': result.summary.medianWalkingTimeMins,
+        'Avg K': result.summary.avgCircuityFactor,
+        'Median K': result.summary.medianCircuityFactor,
+        analyzed: result.summary.analyzedControlPoints,
+        failed: result.summary.failedControlPoints
+      }))
+  )
+}
+
+if (import.meta.env.DEV) {
+  ;(window as any).runBenchmark = runBenchmark
+}
+
 
 // ==========================================================
 // UI / MODALS
@@ -2067,8 +2097,10 @@ onUnmounted(() => {
           :is-loading-network="isCalculatingNetwork"
           :is-simulation-mode="isSimulationMode"
           :virtual-toilets="virtualToilets"
+          @calculate-network="recalculateNetworkAccessibility(approvedToilets)"
           @change-radius="handleChangeRadius"
           @export-csv="handleExportCsv"
+          @export-accessibility-csv="downloadAccessibilityCsvReport(3)"
           @toggle-simulation="isSimulationMode = !isSimulationMode"
           @remove-virtual="removeVirtualToilet"
           @clear-virtual="clearVirtualToilets"

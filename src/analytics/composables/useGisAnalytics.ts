@@ -6,9 +6,11 @@ import { calculateGisStats, exportGisReportCsv } from '../utils/stats'
 import { DNIPRO_CONTROL_POINTS } from '../data/controlPoints'
 import {
     evaluateControlPointsAccessibilityNetwork,
+    exportAccessibilityResultsCsv,
     type AccessibilitySummary
 } from '../utils/accessibility'
 import type { Toilet } from '../../types'
+import {runCandidateBenchmark} from "../utils/accessibilityBenchmark";
 
 export function useGisAnalytics() {
     const isAnalyticsActive = ref(false)
@@ -60,6 +62,24 @@ export function useGisAnalytics() {
         }
     }
 
+    const runAccessibilityBenchmark = async (
+        realToilets: Toilet[]
+    ) => {
+        const combinedToilets = [
+            ...realToilets,
+            ...virtualToilets.value
+        ]
+
+        const benchmark =
+            await runCandidateBenchmark(
+                DNIPRO_CONTROL_POINTS,
+                combinedToilets,
+                [1, 3, 5, 10]
+            )
+
+        return benchmark
+    }
+
     const getBuffersGeoJSON = (realToilets: Toilet[]) => {
         const combinedToilets = [...realToilets, ...virtualToilets.value]
         return createBufferPolygons(combinedToilets, bufferRadiusKm.value)
@@ -74,6 +94,12 @@ export function useGisAnalytics() {
         const combinedToilets = [...realToilets, ...virtualToilets.value]
         const stats = calculateGisStats(combinedToilets, bufferRadiusKm.value)
         exportGisReportCsv(combinedToilets, stats)
+    }
+
+    const downloadAccessibilityCsvReport = (maxCandidates: number = 3) => {
+        if (accessibilityNetworkStats.value) {
+            exportAccessibilityResultsCsv(accessibilityNetworkStats.value, maxCandidates)
+        }
     }
 
     return {
@@ -91,7 +117,9 @@ export function useGisAnalytics() {
         recalculateNetworkAccessibility, // 👈 Асинхронна функція
         getBuffersGeoJSON,
         calculateCircuity,
+        runAccessibilityBenchmark,
         getSummaryStats,
-        downloadCsvReport
+        downloadCsvReport,
+        downloadAccessibilityCsvReport
     }
 }
