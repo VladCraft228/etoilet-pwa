@@ -34,6 +34,7 @@ import EditToiletModal from './components/features/EditToiletModal.vue'
 import RelocateOverlay from './components/map/RelocateOverlay.vue'
 
 import type { Toilet } from './types.ts'
+import ReportToiletModal from "./components/features/ReportToiletModal.vue";
 
 // --- ЛІНИВІ КОМПОНЕНТИ ---
 const LocationPrompt = defineAsyncComponent(
@@ -135,6 +136,12 @@ const isEditModalOpen =
     ref(false)
 
 const toiletToEdit =
+    ref<Toilet | null>(null)
+
+const isReportModalOpen =
+    ref(false)
+
+const reportingToilet =
     ref<Toilet | null>(null)
 
 // ==========================================================
@@ -972,6 +979,14 @@ const handleInternalRoute =
         )
       }
     }
+// ==========================================================
+// REPORT
+// ==========================================================
+
+const handleOpenReportModal = (toilet: Toilet) => {
+  reportingToilet.value = toilet
+  isReportModalOpen.value = true
+}
 
 // ==========================================================
 // WELCOME
@@ -1812,6 +1827,12 @@ onUnmounted(() => {
         "
       />
 
+      <ReportToiletModal
+          :is-open="isReportModalOpen"
+          :toilet="reportingToilet"
+          @close="isReportModalOpen = false"
+      />
+
       <!-- EDIT MODAL -->
 
       <EditToiletModal
@@ -1862,6 +1883,7 @@ onUnmounted(() => {
               :toilet="activeToiletForPopup"
               :is-admin="isAdmin"
               @build-route="handlePopupRoute"
+              @report-issue="handleOpenReportModal"
               @edit="handleAdminEdit"
               @move="handleAdminMove"
               @delete="handleAdminDelete"
@@ -1880,6 +1902,7 @@ onUnmounted(() => {
           :is-admin="isAdmin"
           @close="closeActivePopup"
           @build-route="handlePopupRoute"
+          @report-issue="handleOpenReportModal"
           @edit="handleAdminEdit"
           @move="handleAdminMove"
           @delete="handleAdminDelete"

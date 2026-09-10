@@ -10,6 +10,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'build-route', toilet: Toilet): void;
+  (e: 'report-issue', toilet: Toilet): void;
   (e: 'edit', toilet: Toilet): void;
   (e: 'move', toilet: Toilet): void;
   (e: 'delete', toiletId: string): void;
@@ -152,20 +153,34 @@ const title = computed(() =>
           <p class="text-[13px] text-slate-700 italic relative font-medium leading-relaxed">
             <span class="absolute -top-1 -left-1 text-amber-300 text-lg">"</span>
             <span class="pl-2.5 block">
-        {{ toilet.user_comment }}
-      </span>
+              {{ toilet.user_comment }}
+            </span>
           </p>
         </div>
       </div>
 
-      <!-- Кнопка маршруту -->
-      <button
-          @click="emit('build-route', toilet)"
-          class="w-full flex items-center justify-center gap-1.5 bg-indigo-600 text-white text-xs font-bold py-2 rounded-lg hover:bg-indigo-700 active:scale-[0.98] transition-all shadow-sm cursor-pointer shrink-0"
-      >
-        <span class="material-symbols-outlined text-[16px]">directions_walk</span>
-        Маршрут сюди
-      </button>
+      <!-- Блок дій: Маршрут  + Скарга/Уточнення -->
+      <div class="flex items-stretch gap-1.5 w-full shrink-0">
+        <!-- Основна кнопка навігації -->
+        <button
+            type="button"
+            @click="emit('build-route', toilet)"
+            class="flex-1 flex items-center justify-center gap-1.5 bg-indigo-600 text-white text-xs font-bold py-2 px-3 rounded-lg hover:bg-indigo-700 active:scale-[0.98] transition-all shadow-sm cursor-pointer"
+        >
+          <span class="material-symbols-outlined text-[16px]">directions_walk</span>
+          <span>Маршрут сюди</span>
+        </button>
+
+        <!-- Кнопка репорту -->
+        <button
+            type="button"
+            @click="emit('report-issue', toilet)"
+            class="w-9.5 flex items-center justify-center bg-rose-600 hover:bg-rose-700 text-white rounded-lg active:scale-[0.98] transition-all shadow-xs shadow-rose-200 cursor-pointer shrink-0"
+            title="Повідомити про неточність або проблему"
+        >
+          <span class="material-symbols-outlined text-[18px]">report_problem</span>
+        </button>
+      </div>
 
       <!-- Адмін-панель -->
       <div v-if="isAdmin" class="pt-2 border-t border-slate-200/60 shrink-0">
