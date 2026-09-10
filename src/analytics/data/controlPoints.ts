@@ -25,8 +25,8 @@ export const DNIPRO_CONTROL_POINTS: ControlPoint[] = [
     {
         id: 'cp-3',
         name: 'Пляж Монастирського острова',
-        latitude: 48.45980,
-        longitude: 35.08375,
+        latitude: 48.46335,
+        longitude: 35.08078,
         category: 'park'
     },
     {
@@ -48,7 +48,7 @@ export const DNIPRO_CONTROL_POINTS: ControlPoint[] = [
         name: 'Бульвар Слави (Перемога-6)',
         latitude: 48.41312,
         longitude: 35.06524,
-        category: 'embankment'
+        category: 'pedestrian'
     },
 
     // 🚌 Транспортні вузли
