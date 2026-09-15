@@ -2,9 +2,10 @@
 import { reactive, ref, watch } from 'vue'
 import BaseModal from '../ui/BaseModal.vue'
 import BaseButton from '../ui/BaseButton.vue'
-import { type ToiletFormData, validateToiletForm } from "../utils/validators.ts"
+import { validateToiletForm } from "../utils/validators.ts"
 import imageCompression from 'browser-image-compression'
 import { useToast } from "vue-toastification";
+import type {ToiletFormData} from "../../types.ts";
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const toast = useToast()

@@ -38,6 +38,8 @@ import type {Toilet} from './types.ts'
 import {useGisAnalytics} from "./analytics/composables/useGisAnalytics.ts";
 import AnalyticsPanel from "./analytics/components/AnalyticsPanel.vue";
 import ReportToiletModal from "./components/features/ReportToiletModal.vue";
+import {getStraightDistance} from "./components/utils/geo.ts";
+import type {OptimizationCandidate} from "./analytics/types/optimizationType.ts";
 
 // --- ЛІНИВІ КОМПОНЕНТИ ---
 const LocationPrompt = defineAsyncComponent(
@@ -110,7 +112,6 @@ const {
   fitRouteBounds,
   updateToiletsClustered,
   setSelectedToiletId,
-
   syncTemporaryCoordsWithCenter,
   clearTemporaryCoords,
   renderAnalyticsBuffers,
@@ -135,6 +136,10 @@ const {
   clearVirtualToilets,
   recalculateNetworkAccessibility,
   runAccessibilityBenchmark,
+  isOptimizing,
+  runOptimizationTest,
+  optimizationProgress,
+  optimizationSummary,
   getBuffersGeoJSON,
   getSummaryStats,
   downloadCsvReport,
@@ -153,17 +158,21 @@ const handleToggleAnalytics = () => {
   if (isAnalyticsActive.value) {
     const geojson = getBuffersGeoJSON(approvedToilets.value)
     renderAnalyticsBuffers(geojson)
+    renderControlPointsLayer(controlPoints)
   } else {
     clearAnalyticsBuffers()
+    clearVirtualMarkers()
+    clearControlPointsLayer()
   }
 }
 
+// Перемальовуємо буфери при зміні основних точок
 watch(approvedToilets, (newToilets) => {
   if (isAnalyticsActive.value) {
     const geojson = getBuffersGeoJSON(newToilets)
     renderAnalyticsBuffers(geojson)
   }
-}, {deep: true})
+}, { deep: true })
 
 // Зміна радіуса
 const handleChangeRadius = (newRadiusKm: number) => {
@@ -176,21 +185,17 @@ const handleChangeRadius = (newRadiusKm: number) => {
 
 // Пряма відстань між точкою юзера та фінішним туалетом
 const straightDistanceMeters = computed(() => {
-  // 1. Перевіряємо наявність обраної вбиральні
   if (!targetToiletForRoute.value) return 0
 
   const targetLng = targetToiletForRoute.value.longitude
   const targetLat = targetToiletForRoute.value.latitude
 
   if (targetLng == null || targetLat == null) return 0
-
-  // 2. Отримуємо координати користувача з маркеру MapLibre
   if (!userLocationMarker) return 0
 
   const userLngLat = userLocationMarker.getLngLat()
   if (!userLngLat) return 0
 
-  // 3. Формуємо точки для Turf.js [lng, lat]
   const p1 = turf.point([userLngLat.lng, userLngLat.lat])
   const p2 = turf.point([targetLng, targetLat])
 
@@ -205,7 +210,7 @@ const handleExportCsv = () => {
   downloadCsvReport(approvedToilets.value)
 }
 
-// Хендлер кліку по мапі (інтегрувати в існуючий обробник map.on('click'))
+// Хендлер кліку по мапі
 const handleMapClickForAnalytics = (e: maplibregl.MapMouseEvent) => {
   if (isAnalyticsActive.value && isSimulationMode.value) {
     const { lng, lat } = e.lngLat
@@ -213,7 +218,7 @@ const handleMapClickForAnalytics = (e: maplibregl.MapMouseEvent) => {
   }
 }
 
-// Реактивне оновлення буферів та маркерів при зміні віртуальних точок
+// Об'єднаний watch для оновлення віртуальних точок, контрольних точок та буферів
 watch(
     [virtualToilets, bufferRadiusKm, isAnalyticsActive],
     () => {
@@ -221,32 +226,36 @@ watch(
         const geojson = getBuffersGeoJSON(approvedToilets.value)
         renderAnalyticsBuffers(geojson)
         renderVirtualMarkers(virtualToilets.value)
+        renderControlPointsLayer(controlPoints)
       } else {
         clearVirtualMarkers()
+        clearControlPointsLayer()
       }
     },
     { deep: true }
 )
 
-// Обчислюємо доступність контрольних точок
+// Хендлер запуску оптимізації по кнопці
+const handleRunOptimization = async () => {
+  if (isOptimizing.value) return
 
+  const validToilets = approvedToilets.value.filter(
+      (t) => typeof t.latitude === 'number' && typeof t.longitude === 'number'
+  )
 
-// Оновлюємо watch для підключення шару контрольних точок
-watch(
-    [virtualToilets, bufferRadiusKm, isAnalyticsActive],
-    async () => {
-      if (isAnalyticsActive.value) {
-        const geojson = getBuffersGeoJSON(approvedToilets.value)
-        renderAnalyticsBuffers(geojson)
-        renderVirtualMarkers(virtualToilets.value)
-        renderControlPointsLayer(controlPoints) // 👈 Малюємо контрольні точки
-      } else {
-        clearVirtualMarkers()
-        clearControlPointsLayer() // 👈 Ховаємо контрольні точки
-      }
-    },
-    { deep: true }
-)
+  await runOptimizationTest(validToilets)
+}
+
+// Хендлер фокусування на найкращому кандидаті при кліку в UI
+const handleSelectCandidate = (candidate: OptimizationCandidate) => {
+  if (typeof candidate?.latitude !== 'number' || typeof candidate?.longitude !== 'number') return
+
+  flyToCoords(
+      candidate.longitude,
+      candidate.latitude,
+      16
+  )
+}
 
 // ==========================================================
 // GIS BENCHMARK (DEV ONLY)
@@ -402,41 +411,7 @@ let activeMapPopup:
 // HELPERS
 // ==========================================================
 
-function getDistanceMeters(
-    a: [number, number],
-    b: [number, number]
-) {
-  const R = 6371e3
 
-  const lat1 =
-      a[0] * Math.PI / 180
-
-  const lat2 =
-      b[0] * Math.PI / 180
-
-  const deltaLat =
-      (b[0] - a[0]) *
-      Math.PI / 180
-
-  const deltaLng =
-      (b[1] - a[1]) *
-      Math.PI / 180
-
-  const value =
-      Math.sin(deltaLat / 2) ** 2 +
-      Math.cos(lat1) *
-      Math.cos(lat2) *
-      Math.sin(deltaLng / 2) ** 2
-
-  return (
-      2 *
-      R *
-      Math.atan2(
-          Math.sqrt(value),
-          Math.sqrt(1 - value)
-      )
-  )
-}
 
 const getRemainingRouteDistance = (
     currentLocation: [number, number],
@@ -450,16 +425,11 @@ const getRemainingRouteDistance = (
   let closestIndex = 0
   let closestDistance = Infinity
 
-  for (
-      let i = 0;
-      i < routeCoords.length;
-      i++
-  ) {
-    const distance =
-        getDistanceMeters(
-            currentLocation,
-            routeCoords[i]
-        )
+  for (let i = 0; i < routeCoords.length; i++) {
+    const distance = getStraightDistance(
+        currentLocation[0], currentLocation[1],
+        routeCoords[i][0], routeCoords[i][1]
+    )
 
     if (distance < closestDistance) {
       closestDistance = distance
@@ -470,16 +440,11 @@ const getRemainingRouteDistance = (
   // Від найближчої точки маршруту до його кінця
   let remainingDistance = closestDistance
 
-  for (
-      let i = closestIndex;
-      i < routeCoords.length - 1;
-      i++
-  ) {
-    remainingDistance +=
-        getDistanceMeters(
-            routeCoords[i],
-            routeCoords[i + 1]
-        )
+  for (let i = closestIndex; i < routeCoords.length - 1; i++) {
+    remainingDistance += getStraightDistance(
+        routeCoords[i][0], routeCoords[i][1],
+        routeCoords[i + 1][0], routeCoords[i + 1][1]
+    )
   }
 
   return remainingDistance
@@ -1093,16 +1058,12 @@ const requestRoute = async (
     if (
         pending &&
         lastRoutedLocation.value &&
-        getDistanceMeters(
-            pending,
-            lastRoutedLocation.value
-        ) >=
-        ROUTE_REBUILD_DISTANCE
+        getStraightDistance(
+            pending[0], pending[1],
+            lastRoutedLocation.value[0], lastRoutedLocation.value[1]
+        ) >= ROUTE_REBUILD_DISTANCE
     ) {
-      void requestRoute(
-          pending,
-          false
-      )
+      void requestRoute(pending, false)
     }
   }
 }
@@ -1498,6 +1459,94 @@ const cancelRelocating = () => {
       null
 }
 
+
+// ==========================================================
+// handleShowBestCandidate
+// ==========================================================
+
+// Змінна для збереження маркера оптимізації
+let optimizationCandidateMarker: maplibregl.Marker | null = null
+
+const handleShowBestCandidate = async (lat: number, lng: number) => {
+  currentScreen.value = 'map'
+
+  await nextTick()
+
+  setTimeout(() => {
+    if (!map.value) return
+
+    map.value.resize()
+
+    // Очищаємо попередній маркер, якщо він був
+    if (optimizationCandidateMarker) {
+      optimizationCandidateMarker.remove()
+      optimizationCandidateMarker = null
+    }
+
+    const el = document.createElement('div')
+    el.className = 'relative flex items-center justify-center w-10 h-10 cursor-pointer'
+    el.innerHTML = `
+      <div class="flex items-center justify-center w-10 h-10
+                  bg-purple-600 text-white rounded-full
+                  shadow-[0_0_20px_rgba(147,51,234,0.7)]
+                  border-2 border-white relative z-50 animate-bounce">
+        <span class="material-symbols-outlined text-[24px]">
+          auto_awesome
+        </span>
+      </div>
+    `
+
+    const popupNode = document.createElement('div')
+    popupNode.className = 'p-3 flex flex-col items-center min-w-[200px] font-sans gap-2'
+    popupNode.innerHTML = `
+      <span class="text-[10px] font-bold text-purple-700 bg-purple-50 px-2.5 py-1 rounded-md border border-purple-100 uppercase tracking-wider mb-1">
+        Рекомендація ГІС
+      </span>
+      <p class="text-xs text-slate-700 font-semibold text-center">
+        Оптимальна точка для нової вбиральні
+      </p>
+      <button
+        id="opt-route-btn"
+        class="w-full flex items-center justify-center gap-1.5 bg-purple-600 text-white text-xs font-bold py-2 rounded-lg hover:bg-purple-700 active:scale-95 transition-all shadow-sm mt-1"
+      >
+        <span class="material-symbols-outlined text-[16px]">
+          directions_walk
+        </span>
+        Маршрут сюди
+      </button>
+    `
+
+    const btnRoute = popupNode.querySelector('#opt-route-btn')
+    btnRoute?.addEventListener('click', () => {
+      targetToiletForRoute.value = {
+        latitude: lat,
+        longitude: lng,
+      }
+      showRouteChoiceModal.value = true
+    })
+
+    const popup = new maplibregl.Popup({
+      closeButton: true,
+      closeOnClick: true,
+      anchor: 'bottom',
+      offset: 45,
+    }).setDOMContent(popupNode)
+
+    optimizationCandidateMarker = new maplibregl.Marker({
+      element: el,
+      anchor: 'center',
+    })
+        .setLngLat([lng, lat])
+        .setPopup(popup)
+        .addTo(map.value as any)
+
+    optimizationCandidateMarker.togglePopup()
+
+    flyToCoords(lng, lat, 18)
+  }, 50)
+}
+
+
 // ==========================================================
 // WATCHERS
 // ==========================================================
@@ -1619,11 +1668,10 @@ watch(
         return
       }
 
-      const directDistance =
-          getDistanceMeters(
-              currentLocation,
-              targetCoords
-          )
+      const directDistance = getStraightDistance(
+          currentLocation[0], currentLocation[1],
+          targetCoords[0], targetCoords[1]
+      )
 
       const remainingRouteDistance =
           getRemainingRouteDistance(
@@ -1668,11 +1716,10 @@ watch(
         return
       }
 
-      const distanceSinceLastRoute =
-          getDistanceMeters(
-              currentLocation,
-              lastRoutedLocation.value
-          )
+      const distanceSinceLastRoute = getStraightDistance(
+          currentLocation[0], currentLocation[1],
+          lastRoutedLocation.value[0], lastRoutedLocation.value[1]
+      )
 
       if (
           distanceSinceLastRoute <
@@ -1840,56 +1887,29 @@ watch(
 // ==========================================================
 
 onMounted(async () => {
-  if (
-      localStorage.getItem(
-          'hideAlphaWelcome'
-      ) !== 'true'
-  ) {
-    showWelcomeModal.value =
-        true
+  if (localStorage.getItem('hideAlphaWelcome') !== 'true') {
+    showWelcomeModal.value = true
   }
 
-  window.addEventListener(
-      'resize',
-      handleResize
-  )
+  window.addEventListener('resize', handleResize)
 
-  await initAuth(
-      currentScreen
-  )
+  await initAuth(currentScreen)
 
-  const mapInstance =
-      initMap(
-          'main-map',
+  const mapInstance = initMap('main-map', () => {
+    if (isFollowUserActive.value) {
+      isFollowUserActive.value = false
+    }
+  })
 
-          () => {
-            if (
-                isFollowUserActive.value
-            ) {
-              isFollowUserActive.value =
-                  false
-            }
-          }
-      )
-
-  // ========================================================
   // MANUAL / TOILET TARGETING
-  // ========================================================
-
-  mapInstance.on(
-      'moveend',
-      () => {
-        if (
-            isManualSelectionMode.value ||
-            isPickingToiletMode.value
-        ) {
-          syncTemporaryCoordsWithCenter()
-        }
-      }
-  )
+  mapInstance.on('moveend', () => {
+    if (isManualSelectionMode.value || isPickingToiletMode.value) {
+      syncTemporaryCoordsWithCenter()
+    }
+  })
 
   mapInstance.on('click', (e) => {
-// 1. Спеціальний режим ГІС-симуляції (додавання тестової вбиральні)
+    // 1. Спеціальний режим ГІС-симуляції (додавання тестової вбиральні)
     if (isAnalyticsActive.value && isSimulationMode.value) {
       handleMapClickForAnalytics(e)
       return
@@ -1903,7 +1923,6 @@ onMounted(async () => {
   })
 
   await loadToiletsData()
-
   initRealtime()
 })
 
@@ -2121,6 +2140,12 @@ onUnmounted(() => {
           :is-simulation-mode="isSimulationMode"
           :virtual-toilets="virtualToilets"
           @calculate-network="recalculateNetworkAccessibility(approvedToilets)"
+          :is-optimizing="isOptimizing"
+          :optimization-progress="optimizationProgress"
+          :optimization-summary="optimizationSummary"
+          @run-optimization="handleRunOptimization"
+          @select-candidate="handleSelectCandidate"
+          @show-candidate="handleShowBestCandidate"
           @change-radius="handleChangeRadius"
           @export-csv="handleExportCsv"
           @export-accessibility-csv="downloadAccessibilityCsvReport(3)"
