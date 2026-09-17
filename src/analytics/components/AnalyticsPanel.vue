@@ -16,6 +16,7 @@ const props = defineProps<{
   }
   accessibilityStats?: AccessibilitySummary | null
   optimizationSummary?: OptimizationSummary | null
+  selectedCandidateIndex?: number | null
   isLoadingNetwork?: boolean
   networkProgress?: number
   isOptimizing?: boolean
@@ -25,13 +26,14 @@ const props = defineProps<{
 }>()
 
 const categoryStats = computed(() => {
-  if (!props.accessibilityStats) {
-    return []
-  }
+  if (!props.accessibilityStats) return []
+  return calculateCategoryAccessibilityStats(props.accessibilityStats.results)
+})
 
-  return calculateCategoryAccessibilityStats(
-      props.accessibilityStats.results
-  )
+// Витягуємо TOP-5 кандидатів з optimizationSummary
+const topCandidates = computed<OptimizationCandidate[]>(() => {
+  if (!props.optimizationSummary?.topCandidates) return []
+  return props.optimizationSummary.topCandidates.slice(0, 5)
 })
 
 const emit = defineEmits<{
@@ -44,7 +46,7 @@ const emit = defineEmits<{
   (e: 'clear-virtual'): void
   (e: 'calculate-network'): void
   (e: 'run-optimization'): void
-  (e: 'select-candidate', candidate: OptimizationCandidate): void
+  (e: 'select-candidate', candidate: OptimizationCandidate, index: number): void
   (e: 'show-candidate', lat: number, lng: number): void
 }>()
 
@@ -75,7 +77,7 @@ const radiusOptions = [
 
     <!-- Тіло панелі -->
     <div class="mt-3 space-y-3">
-      <!-- Вибір буфера (Геометричний радіус) -->
+      <!-- Вибір буфера -->
       <div>
         <label class="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">
           Геометричний радіус покриття
@@ -149,18 +151,18 @@ const radiusOptions = [
         </div>
       </div>
 
+      <!-- БЛОК ОПТИМІЗАЦІЇ РАЗМІЩЕННЯ -->
       <div class="bg-amber-50/60 p-3 rounded-xl border border-amber-200/80 text-xs space-y-2">
         <div class="flex items-center justify-between font-bold text-amber-950">
-    <span class="flex items-center gap-1.5">
-      <span class="material-symbols-outlined text-[18px] text-amber-600">auto_awesome</span>
-      Оптимізація розміщення
-    </span>
+          <span class="flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-[18px] text-amber-600">auto_awesome</span>
+            Оптимізація розміщення
+          </span>
           <span v-if="isOptimizing" class="text-xs font-semibold text-amber-600">
-      {{ optimizationProgress ?? 0 }}%
-    </span>
+            {{ optimizationProgress ?? 0 }}%
+          </span>
         </div>
 
-        <!-- Прогресбар завантаження оптимізації -->
         <div v-if="isOptimizing" class="space-y-1">
           <div class="w-full bg-amber-200/60 rounded-full h-2 overflow-hidden">
             <div
@@ -173,7 +175,6 @@ const radiusOptions = [
           </div>
         </div>
 
-        <!-- Кнопка розрахунку оптимізації -->
         <button
             v-else
             type="button"
@@ -184,53 +185,59 @@ const radiusOptions = [
           <span>Знайти найкраще місце</span>
         </button>
 
-        <!-- Результат оптимізації -->
-        <template v-if="optimizationSummary && optimizationSummary.bestCandidate && !isOptimizing">
-          <div class="pt-1.5 border-t border-amber-200/60 space-y-2">
+        <!-- Таблиця TOP-5 результатів -->
+        <template v-if="optimizationSummary && topCandidates.length > 0 && !isOptimizing">
+          <div class="pt-2 border-t border-amber-200/60 space-y-2">
             <div class="text-[10px] text-amber-800 font-medium flex justify-between items-center">
-              <span>Проаналізовано кандидатів:</span>
+              <span>Знайдено кандидатів:</span>
               <b class="text-amber-950">{{ optimizationSummary.totalCandidates }}</b>
             </div>
 
-            <!-- Картка найкращого кандидата -->
-            <div
-                @click="emit('select-candidate', optimizationSummary.bestCandidate)"
-                class="p-2 bg-white rounded-lg border border-amber-300 shadow-sm cursor-pointer hover:border-amber-500 transition-all"
-            >
-              <div class="flex items-center justify-between text-[11px] font-bold text-amber-900 mb-1">
-                <span class="flex items-center gap-1">
-                  <span class="material-symbols-outlined text-[14px] text-amber-500">stars</span>
-                  Найкраща точка
-                </span>
-                <button
-                    v-if="optimizationSummary?.bestCandidate"
-                    @click="emit('show-candidate', optimizationSummary.bestCandidate.latitude, optimizationSummary.bestCandidate.longitude)"
-                    class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer bg-slate-100 text-slate-600 hover:bg-slate-200"
+            <div class="overflow-x-auto rounded-lg border border-amber-200/80 bg-white shadow-sm">
+              <table class="w-full text-[10px] text-left">
+                <thead class="bg-amber-100/50 text-amber-900 border-b border-amber-200/60 font-semibold">
+                <tr>
+                  <th class="p-1.5 text-center">№</th>
+                  <th class="p-1.5 text-center">Δ5</th>
+                  <th class="p-1.5 text-center">Δ10</th>
+                  <th class="p-1.5 text-right">Відст.</th>
+                </tr>
+                </thead>
+                <tbody class="divide-y divide-amber-100">
+                <tr
+                    v-for="(cand, idx) in topCandidates"
+                    :key="idx"
+                    @click="emit('select-candidate', cand, idx); emit('show-candidate', cand.latitude, cand.longitude)"
+                    :class="[
+                      'cursor-pointer transition-colors hover:bg-amber-100/40',
+                      selectedCandidateIndex === idx ? 'bg-amber-100/80 font-bold' : ''
+                    ]"
                 >
-                  Показати
-                </button>
-              </div>
-
-              <div class="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] text-slate-600">
-                <div>
-                  Δ 5 хв:
-                  <b :class="optimizationSummary.bestCandidate.deltaCoverage5 > 0 ? 'text-emerald-600' : 'text-slate-700'">
-                    +{{ optimizationSummary.bestCandidate.deltaCoverage5 }}%
-                  </b>
-                </div>
-                <div>
-                  Δ 10 хв:
-                  <b :class="optimizationSummary.bestCandidate.deltaCoverage10 > 0 ? 'text-emerald-600' : 'text-slate-700'">
-                    +{{ optimizationSummary.bestCandidate.deltaCoverage10 }}%
-                  </b>
-                </div>
-                <div>
-                  Сер. відстань: <b>{{ optimizationSummary.bestCandidate.avgWalkingDistance }} м</b>
-                </div>
-                <div>
-                  Покращено точок: <b>{{ optimizationSummary.bestCandidate.improvedPoints }}</b>
-                </div>
-              </div>
+                  <td class="p-1.5 text-center">
+                      <span
+                          :class="[
+                          'inline-flex items-center justify-center w-4 h-4 rounded-full text-[9px]',
+                          idx === 0 ? 'bg-emerald-500 text-white font-bold' : 'bg-slate-200 text-slate-700'
+                        ]"
+                      >
+                        {{ idx === 0 ? '★' : idx + 1 }}
+                      </span>
+                  </td>
+                  <td class="p-1.5 text-center" :class="cand.deltaCoverage5 > 0 ? 'text-emerald-600 font-semibold' : 'text-slate-500'">
+                    +{{ cand.deltaCoverage5 }}%
+                  </td>
+                  <td class="p-1.5 text-center" :class="cand.deltaCoverage10 > 0 ? 'text-emerald-600 font-semibold' : 'text-slate-500'">
+                    +{{ cand.deltaCoverage10 }}%
+                  </td>
+                  <td class="p-1.5 text-right text-slate-600">
+                    {{ Math.round(cand.avgWalkingDistance) }} м
+                  </td>
+                </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="text-[9px] text-amber-700 text-center">
+              Клікніть на рядок, щоб сфокусувати карту
             </div>
           </div>
         </template>
@@ -239,20 +246,19 @@ const radiusOptions = [
       <!-- БЛОК МЕРЕЖЕВОЇ ДОСТУПНОСТІ (OSRM) -->
       <div class="bg-indigo-50/90 p-3 rounded-xl border border-indigo-100 text-xs space-y-2">
         <div class="flex items-center justify-between font-bold text-indigo-950">
-    <span class="flex items-center gap-1.5">
-      <span class="material-symbols-outlined text-[18px] text-indigo-600">directions_walk</span>
-      Мережева доступність (OSRM)
-    </span>
+          <span class="flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-[18px] text-indigo-600">directions_walk</span>
+            Мережева доступність (OSRM)
+          </span>
 
           <span v-if="isLoadingNetwork" class="text-xs font-bold text-indigo-600">
-      {{ networkProgress ?? 0 }}%
-    </span>
+            {{ networkProgress ?? 0 }}%
+          </span>
           <span v-else-if="accessibilityStats" class="text-sm text-indigo-600 font-extrabold">
-      {{ accessibilityStats.accessible5MinPercent }}%
-    </span>
+            {{ accessibilityStats.accessible5MinPercent }}%
+          </span>
         </div>
 
-        <!-- Прогресбар під час завантаження OSRM -->
         <div v-if="isLoadingNetwork" class="space-y-1">
           <div class="w-full bg-indigo-200/60 rounded-full h-2 overflow-hidden">
             <div
@@ -265,7 +271,6 @@ const radiusOptions = [
           </div>
         </div>
 
-        <!-- Кнопка ручного запуску -->
         <div v-if="!accessibilityStats && !isLoadingNetwork" class="pt-1">
           <button
               type="button"
@@ -277,7 +282,6 @@ const radiusOptions = [
           </button>
         </div>
 
-        <!-- Результати розрахунку -->
         <template v-else-if="accessibilityStats && !isLoadingNetwork">
           <div class="w-full bg-indigo-200/60 rounded-full h-2 overflow-hidden">
             <div
@@ -296,7 +300,6 @@ const radiusOptions = [
             <div>Сер. K: <b>{{ accessibilityStats.avgCircuityFactor }}</b></div>
           </div>
 
-          <!-- Кнопки дій OSRM -->
           <div class="grid grid-cols-2 gap-1.5 pt-1">
             <button
                 type="button"
@@ -341,7 +344,6 @@ const radiusOptions = [
               <th class="text-right py-1.5 font-semibold">K</th>
             </tr>
             </thead>
-
             <tbody>
             <tr
                 v-for="stat in categoryStats"
@@ -351,27 +353,22 @@ const radiusOptions = [
               <td class="py-1.5 text-slate-700 font-medium">
                 {{ stat.category }}
               </td>
-
               <td class="py-1.5 text-center text-slate-500">
                 {{ stat.count }}
               </td>
-
               <td class="py-1.5 text-center">
                   <span class="font-semibold text-indigo-600">
                     {{ Math.round(stat.coverage5) }}%
                   </span>
               </td>
-
               <td class="py-1.5 text-center">
                   <span class="font-semibold text-indigo-600">
                     {{ Math.round(stat.coverage10) }}%
                   </span>
               </td>
-
               <td class="py-1.5 text-right text-slate-600">
                 {{ Math.round(stat.avgWalking) }}
               </td>
-
               <td class="py-1.5 text-right text-slate-600">
                 {{ stat.avgCircuity.toFixed(2) }}
               </td>

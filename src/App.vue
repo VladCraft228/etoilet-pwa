@@ -5,10 +5,9 @@ import {
   onMounted,
   onUnmounted,
   defineAsyncComponent,
-  nextTick, computed
-} from 'vue'
+  nextTick, computed} from 'vue'
 
-import maplibregl from 'maplibre-gl'
+import maplibregl, {MapMouseEvent} from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 // --- СЕРВІСИ ТА COMPOSABLES ---
@@ -40,6 +39,7 @@ import AnalyticsPanel from "./analytics/components/AnalyticsPanel.vue";
 import ReportToiletModal from "./components/features/ReportToiletModal.vue";
 import {getStraightDistance} from "./components/utils/geo.ts";
 import type {OptimizationCandidate} from "./analytics/types/optimizationType.ts";
+import OptimizationLayer from "./analytics/components/OptimizationLayer.vue";
 
 // --- ЛІНИВІ КОМПОНЕНТИ ---
 const LocationPrompt = defineAsyncComponent(
@@ -234,28 +234,6 @@ watch(
     },
     { deep: true }
 )
-
-// Хендлер запуску оптимізації по кнопці
-const handleRunOptimization = async () => {
-  if (isOptimizing.value) return
-
-  const validToilets = approvedToilets.value.filter(
-      (t) => typeof t.latitude === 'number' && typeof t.longitude === 'number'
-  )
-
-  await runOptimizationTest(validToilets)
-}
-
-// Хендлер фокусування на найкращому кандидаті при кліку в UI
-const handleSelectCandidate = (candidate: OptimizationCandidate) => {
-  if (typeof candidate?.latitude !== 'number' || typeof candidate?.longitude !== 'number') return
-
-  flyToCoords(
-      candidate.longitude,
-      candidate.latitude,
-      16
-  )
-}
 
 // ==========================================================
 // GIS BENCHMARK (DEV ONLY)
@@ -1463,90 +1441,47 @@ const cancelRelocating = () => {
 // ==========================================================
 // handleShowBestCandidate
 // ==========================================================
+// 1. Стейт вибраного кандидата
+const selectedCandidateIndex = ref<number | null>(null)
 
-// Змінна для збереження маркера оптимізації
-let optimizationCandidateMarker: maplibregl.Marker | null = null
+// 2. TOP-5 кандидатів для OptimizationLayer та AnalyticsPanel
+const topCandidates = computed<OptimizationCandidate[]>(() => {
+  return optimizationSummary.value?.topCandidates?.slice(0, 5) || []
+})
 
-const handleShowBestCandidate = async (lat: number, lng: number) => {
-  currentScreen.value = 'map'
+// 3. Обробник вибору кандидата (з таблиці або маркера)
+const handleSelectCandidate = (candidate: OptimizationCandidate, index: number) => {
+  if (typeof candidate?.latitude !== 'number' || typeof candidate?.longitude !== 'number') return
 
-  await nextTick()
-
-  setTimeout(() => {
-    if (!map.value) return
-
-    map.value.resize()
-
-    // Очищаємо попередній маркер, якщо він був
-    if (optimizationCandidateMarker) {
-      optimizationCandidateMarker.remove()
-      optimizationCandidateMarker = null
-    }
-
-    const el = document.createElement('div')
-    el.className = 'relative flex items-center justify-center w-10 h-10 cursor-pointer'
-    el.innerHTML = `
-      <div class="flex items-center justify-center w-10 h-10
-                  bg-purple-600 text-white rounded-full
-                  shadow-[0_0_20px_rgba(147,51,234,0.7)]
-                  border-2 border-white relative z-50 animate-bounce">
-        <span class="material-symbols-outlined text-[24px]">
-          auto_awesome
-        </span>
-      </div>
-    `
-
-    const popupNode = document.createElement('div')
-    popupNode.className = 'p-3 flex flex-col items-center min-w-[200px] font-sans gap-2'
-    popupNode.innerHTML = `
-      <span class="text-[10px] font-bold text-purple-700 bg-purple-50 px-2.5 py-1 rounded-md border border-purple-100 uppercase tracking-wider mb-1">
-        Рекомендація ГІС
-      </span>
-      <p class="text-xs text-slate-700 font-semibold text-center">
-        Оптимальна точка для нової вбиральні
-      </p>
-      <button
-        id="opt-route-btn"
-        class="w-full flex items-center justify-center gap-1.5 bg-purple-600 text-white text-xs font-bold py-2 rounded-lg hover:bg-purple-700 active:scale-95 transition-all shadow-sm mt-1"
-      >
-        <span class="material-symbols-outlined text-[16px]">
-          directions_walk
-        </span>
-        Маршрут сюди
-      </button>
-    `
-
-    const btnRoute = popupNode.querySelector('#opt-route-btn')
-    btnRoute?.addEventListener('click', () => {
-      targetToiletForRoute.value = {
-        latitude: lat,
-        longitude: lng,
-      }
-      showRouteChoiceModal.value = true
-    })
-
-    const popup = new maplibregl.Popup({
-      closeButton: true,
-      closeOnClick: true,
-      anchor: 'bottom',
-      offset: 45,
-    }).setDOMContent(popupNode)
-
-    optimizationCandidateMarker = new maplibregl.Marker({
-      element: el,
-      anchor: 'center',
-    })
-        .setLngLat([lng, lat])
-        .setPopup(popup)
-        .addTo(map.value as any)
-
-    optimizationCandidateMarker.togglePopup()
-
-    flyToCoords(lng, lat, 18)
-  }, 50)
+  selectedCandidateIndex.value = index
+  handleShowBestCandidate(candidate.latitude, candidate.longitude)
 }
 
+// 4. Фокусування карти на кандидаті
+const handleShowBestCandidate = async (lat: number, lng: number) => {
+  currentScreen.value = 'map'
+  await nextTick()
 
+  if (!map.value) return
+
+  map.value.resize()
+
+  // Допоміжна функція центрування (або map.value.flyTo)
+  flyToCoords(lng, lat, 16)
+}
+
+// 5. Запуск оптимізації
+const handleRunOptimization = async () => {
+  if (isOptimizing.value) return
+
+  selectedCandidateIndex.value = null
+
+  const validToilets = approvedToilets.value.filter(
+      (t) => typeof t.latitude === 'number' && typeof t.longitude === 'number'
+  )
+
+  await runOptimizationTest(validToilets)
+}
 // ==========================================================
 // WATCHERS
 // ==========================================================
@@ -1892,35 +1827,51 @@ onMounted(async () => {
   }
 
   window.addEventListener('resize', handleResize)
-
   await initAuth(currentScreen)
 
-  const mapInstance = initMap('main-map', () => {
+  // Чекаємо, поки DOM буде готовий
+  await nextTick()
+
+  // Ініціалізуємо мапу
+  initMap('main-map', () => {
     if (isFollowUserActive.value) {
       isFollowUserActive.value = false
     }
   })
 
-  // MANUAL / TOILET TARGETING
-  mapInstance.on('moveend', () => {
-    if (isManualSelectionMode.value || isPickingToiletMode.value) {
-      syncTemporaryCoordsWithCenter()
-    }
-  })
+  // Використовуємо прапорець замість зупинки watch
+  let mapEventsInitialized = false
 
-  mapInstance.on('click', (e) => {
-    // 1. Спеціальний режим ГІС-симуляції (додавання тестової вбиральні)
-    if (isAnalyticsActive.value && isSimulationMode.value) {
-      handleMapClickForAnalytics(e)
-      return
-    }
+  // Додаємо події через watch на map.value
+  watch(map, (mapInstance) => {
+    if (!mapInstance || mapEventsInitialized) return
 
-    // 2. Реагуємо на клік ТІЛЬКИ якщо ми в режимі вибору місця для НОВОГО ТУАЛЕТУ
-    if (isPickingToiletMode.value) {
-      temporaryClickedCoords.value = [e.lngLat.lat, e.lngLat.lng]
-      flyToCoords(e.lngLat.lng, e.lngLat.lat, mapInstance.getZoom())
-    }
-  })
+    // Примусовий resize після ініціалізації
+    setTimeout(() => {
+      mapInstance.resize()
+    }, 100)
+
+    mapInstance.on('moveend', () => {
+      if (isManualSelectionMode.value || isPickingToiletMode.value) {
+        syncTemporaryCoordsWithCenter()
+      }
+    })
+
+    mapInstance.on('click', (e: MapMouseEvent) => {
+      if (isAnalyticsActive.value && isSimulationMode.value) {
+        handleMapClickForAnalytics(e)
+        return
+      }
+
+      if (isPickingToiletMode.value) {
+        temporaryClickedCoords.value = [e.lngLat.lat, e.lngLat.lng]
+        flyToCoords(e.lngLat.lng, e.lngLat.lat, mapInstance.getZoom())
+      }
+    })
+
+    // Позначаємо, що події ініціалізовані
+    mapEventsInitialized = true
+  }, { immediate: true })
 
   await loadToiletsData()
   initRealtime()
@@ -2154,6 +2105,16 @@ onUnmounted(() => {
           @clear-virtual="clearVirtualToilets"
           @close="handleToggleAnalytics"
       />
+
+      <!-- Шар кандидатів оптимізації -->
+      <OptimizationLayer
+          :map="map"
+          :candidates="topCandidates"
+          :selected-index="selectedCandidateIndex"
+          :visible="true"
+          @select-candidate="handleSelectCandidate"
+      />
+
 
       <MapControls
           v-show="

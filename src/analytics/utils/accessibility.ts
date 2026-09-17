@@ -2,6 +2,7 @@ import * as turf from '@turf/turf'
 import type { Toilet } from '../../types'
 import type { ControlPoint } from '../data/controlPoints'
 import { getStraightDistance } from '../../components/utils/geo'
+import {median} from "./stats.ts";
 
 // ==========================================================
 // TYPES
@@ -68,19 +69,6 @@ const sleep = (ms: number): Promise<void> =>
     new Promise((resolve) => {
         setTimeout(resolve, ms)
     })
-
-function median(values: number[]): number {
-    if (values.length === 0) return 0
-
-    const sorted = [...values].sort((a, b) => a - b)
-    const middle = Math.floor(sorted.length / 2)
-
-    if (sorted.length % 2 === 0) {
-        return (sorted[middle - 1] + sorted[middle]) / 2
-    }
-
-    return sorted[middle]
-}
 
 // ==========================================================
 // OSRM & CACHE
@@ -309,9 +297,9 @@ export async function evaluateControlPointsAccessibilityNetwork(
         analyzedControlPoints: successfulResults.length,
         failedControlPoints: failedResults.length,
         accessible5MinCount,
-        accessible5MinPercent: Math.round((accessible5MinCount / successfulResults.length) * 100),
+        accessible5MinPercent: Math.round((accessible5MinCount / controlPoints.length) * 100),
         accessible10MinCount,
-        accessible10MinPercent: Math.round((accessible10MinCount / successfulResults.length) * 100),
+        accessible10MinPercent: Math.round((accessible10MinCount / controlPoints.length) * 100),
         avgStraightDistanceMeters: Math.round(sumStraight / successfulResults.length),
         medianStraightDistanceMeters: Math.round(median(straightDistances)),
         avgWalkingDistanceMeters: Math.round(sumWalking / successfulResults.length),

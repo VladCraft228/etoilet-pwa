@@ -1,280 +1,182 @@
-import {ref, shallowRef} from 'vue'
+import { ref, shallowRef } from 'vue'
 import maplibregl from 'maplibre-gl'
-import type {Point} from 'geojson'
-import type {Toilet} from "../types.ts";
+import type { Point } from 'geojson'
+import type { Toilet } from '../types.ts'
 
 export type LatLng = [number, number]
 export type LngLat = [number, number]
 
+// Константи для уникнення magic strings & magic numbers
+const GREEN_COLOR = '#10b981'
+const BLUE_COLOR = '#2563eb'
+const ORANGE_COLOR = '#f97316'
+const CYAN_COLOR = '#06b6d4'
+
+const SOURCE_IDS = {
+    toilets: 'toilets',
+    buffers: 'analytics-buffers',
+    virtual: 'virtual-toilets-source',
+    control: 'control-points-source'
+} as const
+
 export function useMap() {
     const map = shallowRef<maplibregl.Map | null>(null)
     const temporaryClickedCoords = ref<LatLng | null>(null)
-
     const zoom = ref(13)
-
-    /**
-     * center — виключно у форматі MapLibre:
-     * [lng, lat]
-     */
     const center = ref<LngLat>([35.0461, 48.4647])
-
-    const toiletMarkers =
-        shallowRef<maplibregl.Marker[]>([])
-
-    // Залишаємо для сумісності з поточним кодом.
-    let userLocationMarker: maplibregl.Marker | null = null
-
-    /**
-     * Стан вибраного туалету.
-     */
-    const selectedToiletId =
-        ref<string | null>(null)
+    const selectedToiletId = ref<string | null>(null)
 
     // ==========================================================
     // COORDINATE HELPERS
     // ==========================================================
+    const lngLatToLatLng = (lng: number, lat: number): LatLng => [lat, lng]
+    const latLngToLngLat = (lat: number, lng: number): LngLat => [lng, lat]
 
-    /**
-     * MapLibre [lng, lat] -> App [lat, lng]
-     */
-    const lngLatToLatLng = (
-        lng: number,
-        lat: number
-    ): LatLng => {
-        return [lat, lng]
-    }
-
-    /**
-     * App [lat, lng] -> MapLibre [lng, lat]
-     */
-    const latLngToLngLat = (
-        lat: number,
-        lng: number
-    ): LngLat => {
-        return [lng, lat]
-    }
-
-    /**
-     * Отримати поточний центр карти
-     * у форматі застосунку [lat, lng].
-     */
-
-    const getMapCenter = (): maplibregl.LngLat | null => {
-        if (!map.value) {
-            return null
-        }
-        return map.value.getCenter()
-    }
+    const getMapCenter = (): maplibregl.LngLat | null => map.value?.getCenter() ?? null
 
     const getCenterLatLng = (): LatLng | null => {
-        if (!map.value) {
-            return null
-        }
-
-        const currentCenter =
-            map.value.getCenter()
-
-        return lngLatToLatLng(
-            currentCenter.lng,
-            currentCenter.lat
-        )
+        const c = getMapCenter()
+        return c ? lngLatToLatLng(c.lng, c.lat) : null
     }
 
-    /**
-     * Синхронізує temporaryClickedCoords
-     * з центром карти.
-     *
-     * Використовується під час ручного вибору.
-     */
     const syncTemporaryCoordsWithCenter = () => {
-        const coords =
-            getCenterLatLng()
-
-        if (coords) {
-            temporaryClickedCoords.value =
-                coords
-        }
+        const coords = getCenterLatLng()
+        if (coords) temporaryClickedCoords.value = coords
     }
 
-    /**
-     * Очищення тимчасової точки.
-     */
     const clearTemporaryCoords = () => {
         temporaryClickedCoords.value = null
     }
 
     // ==========================================================
-    // ICON SIZE
+    // ICON GENERATOR & HELPERS
     // ==========================================================
+    const createWcIcon = (bgColor: string): Promise<HTMLImageElement> => {
+        return new Promise((resolve) => {
+            const canvas = document.createElement('canvas')
+            canvas.width = 72
+            canvas.height = 72
+            const ctx = canvas.getContext('2d')
 
-    const getIconSizeExpression = (
-        activeId: string | null
-    ) => {
-        return [
-            'interpolate',
-            ['linear'],
-            ['zoom'],
+            if (ctx) {
+                // Тінь
+                ctx.beginPath()
+                ctx.arc(36, 36, 32, 0, 2 * Math.PI)
+                ctx.fillStyle = 'rgba(0,0,0,0.15)'
+                ctx.fill()
 
-            10,
-            [
-                'case',
-                [
-                    '==',
-                    ['get', 'id'],
-                    activeId || ''
-                ],
-                0.45 * 1.3,
-                0.45
-            ],
+                // Біла рамка
+                ctx.beginPath()
+                ctx.arc(36, 36, 30, 0, 2 * Math.PI)
+                ctx.fillStyle = '#ffffff'
+                ctx.fill()
 
-            14,
-            [
-                'case',
-                [
-                    '==',
-                    ['get', 'id'],
-                    activeId || ''
-                ],
-                0.55 * 1.3,
-                0.55
-            ],
+                // Фон
+                ctx.beginPath()
+                ctx.arc(36, 36, 26, 0, 2 * Math.PI)
+                ctx.fillStyle = bgColor
+                ctx.fill()
 
-            17,
-            [
-                'case',
-                [
-                    '==',
-                    ['get', 'id'],
-                    activeId || ''
-                ],
-                0.65 * 1.3,
-                0.65
-            ]
-        ]
+                // Текст/Іконка
+                ctx.fillStyle = '#ffffff'
+                ctx.font = 'normal 400 32px "Material Symbols Outlined", "Material Icons", sans-serif'
+                ctx.textAlign = 'center'
+                ctx.textBaseline = 'middle'
+                ctx.fillText('wc', 36, 36)
+            }
+
+            const img = new Image()
+            img.src = canvas.toDataURL()
+            img.onload = () => resolve(img)
+        })
     }
+
+    const ensureIconExists = async (iconId: string, color: string) => {
+        if (!map.value || map.value.hasImage(iconId)) return
+        const img = await createWcIcon(color)
+        if (map.value && !map.value.hasImage(iconId)) {
+            map.value.addImage(iconId, img)
+        }
+    }
+
+    const getIconSizeExpression = (activeId: string | null) => [
+        'interpolate',
+        ['linear'],
+        ['zoom'],
+        10, ['case', ['==', ['get', 'id'], activeId || ''], 0.585, 0.45],
+        14, ['case', ['==', ['get', 'id'], activeId || ''], 0.715, 0.55],
+        17, ['case', ['==', ['get', 'id'], activeId || ''], 0.845, 0.65]
+    ]
 
     // ==========================================================
     // MAP INITIALIZATION
     // ==========================================================
+    const initMap = (containerId: string, onDragStart: () => void) => {
+        const mapInstance = new maplibregl.Map({
+            container: containerId,
+            style: 'https://tiles.openfreemap.org/styles/bright',
+            center: center.value,
+            zoom: zoom.value,
+            pitch: 0,
+            pitchWithRotate: false,
+            touchPitch: false,
+            dragRotate: true,
+            touchZoomRotate: true,
+            maxZoom: 19,
+            minZoom: 5
+        })
 
-    const initMap = (
-        containerId: string,
-        onDragStart: () => void
-    ) => {
-        const mapInstance =
-            new maplibregl.Map({
-                container: containerId,
-
-                style:
-                    'https://tiles.openfreemap.org/styles/bright',
-
-                center: center.value,
-                zoom: zoom.value,
-
-                pitch: 0,
-                pitchWithRotate: false,
-                touchPitch: false,
-
-                dragRotate: true,
-                touchZoomRotate: true,
-
-                maxZoom: 19,
-                minZoom: 5
-            })
-
-        // ------------------------------------------------------
-        // DRAG START
-        // ------------------------------------------------------
-
-        mapInstance.on(
-            'dragstart',
-            onDragStart
-        )
-
-        // ------------------------------------------------------
-        // MAP LOAD
-        // ------------------------------------------------------
-
-        mapInstance.on(
-            'load',
-            () => {
-                mapInstance.resize()
-            }
-        )
-
-        // ------------------------------------------------------
-        // MOVE END
-        // ------------------------------------------------------
-
-        mapInstance.on(
-            'moveend',
-            () => {
-                const currentCenter =
-                    mapInstance.getCenter()
-
-                center.value = [
-                    currentCenter.lng,
-                    currentCenter.lat
-                ]
-
-                zoom.value =
-                    mapInstance.getZoom()
-            }
-        )
+        mapInstance.on('dragstart', onDragStart)
+        mapInstance.on('load', () => mapInstance.resize())
+        mapInstance.on('moveend', () => {
+            const c = mapInstance.getCenter()
+            center.value = [c.lng, c.lat]
+            zoom.value = mapInstance.getZoom()
+        })
 
         map.value = mapInstance
-
         return mapInstance
     }
 
     // ==========================================================
     // CAMERA
     // ==========================================================
-
-    const flyToCoords = (
-        lng: number,
-        lat: number,
-        targetZoom: number
-    ) => {
-        if (!map.value) {
-            return
-        }
-
-        map.value.setPadding({
-            top: 0,
-            bottom: 0,
-            left: 0,
-            right: 0
-        })
-
+    const flyToCoords = (lng: number, lat: number, targetZoom: number) => {
+        if (!map.value) return
+        map.value.setPadding({ top: 0, bottom: 0, left: 0, right: 0 })
         map.value.flyTo({
-            center: [
-                lng,
-                lat
-            ],
+            center: [lng, lat],
             zoom: targetZoom,
             essential: true,
             pitch: 0
         })
     }
 
+    const fitRouteBounds = (coords: LatLng[]) => {
+        if (!map.value || !coords.length) return
+
+        const lats = coords.map((c) => c[0])
+        const lngs = coords.map((c) => c[1])
+
+        map.value.fitBounds(
+            [
+                [Math.min(...lngs), Math.min(...lats)],
+                [Math.max(...lngs), Math.max(...lats)]
+            ],
+            {
+                padding: { top: 100, bottom: 160, left: 60, right: 60 },
+                duration: 1200,
+                essential: true
+            }
+        )
+    }
+
     // ==========================================================
     // SELECTED TOILET
     // ==========================================================
-
-    const setSelectedToiletId = (
-        id: string | null
-    ) => {
+    const setSelectedToiletId = (id: string | null) => {
         selectedToiletId.value = id
-
-        if (
-            !map.value ||
-            !map.value.getLayer(
-                'unclustered-point'
-            )
-        ) {
-            return
-        }
+        if (!map.value?.getLayer('unclustered-point')) return
 
         map.value.setLayoutProperty(
             'unclustered-point',
@@ -284,644 +186,171 @@ export function useMap() {
     }
 
     // ==========================================================
-    // TOILETS
+    // TOILETS & CLUSTERS
     // ==========================================================
-
-    const updateToiletsClustered = (
+    const updateToiletsClustered = async (
         toilets: any[],
-        onToiletClick: (
-            id: string
-        ) => void
+        onToiletClick: (id: string) => void
     ) => {
-        if (!map.value) {
-            return
-        }
+        if (!map.value) return
 
-        const sourceId = 'toilets'
+        const greenIconId = 'wc-green'
+        const blueIconId = 'wc-blue'
 
-        // ------------------------------------------------------
-        // ICON GENERATOR
-        // ------------------------------------------------------
-
-        const createWcIcon = (
-            bgColor: string
-        ): Promise<HTMLImageElement> => {
-            return new Promise(
-                (resolve) => {
-                    const canvas =
-                        document.createElement(
-                            'canvas'
-                        )
-
-                    canvas.width = 72
-                    canvas.height = 72
-
-                    const ctx =
-                        canvas.getContext(
-                            '2d'
-                        )
-
-                    if (ctx) {
-                        // Тінь
-                        ctx.beginPath()
-                        ctx.arc(
-                            36,
-                            36,
-                            32,
-                            0,
-                            2 * Math.PI
-                        )
-
-                        ctx.fillStyle =
-                            'rgba(0,0,0,0.15)'
-
-                        ctx.fill()
-
-                        // Біла рамка
-                        ctx.beginPath()
-                        ctx.arc(
-                            36,
-                            36,
-                            30,
-                            0,
-                            2 * Math.PI
-                        )
-
-                        ctx.fillStyle =
-                            '#ffffff'
-
-                        ctx.fill()
-
-                        // Фон
-                        ctx.beginPath()
-                        ctx.arc(
-                            36,
-                            36,
-                            26,
-                            0,
-                            2 * Math.PI
-                        )
-
-                        ctx.fillStyle =
-                            bgColor
-
-                        ctx.fill()
-
-                        // Material Symbols
-                        ctx.fillStyle =
-                            '#ffffff'
-
-                        ctx.font =
-                            'normal 400 32px "Material Symbols Outlined", "Material Icons", sans-serif'
-
-                        ctx.textAlign =
-                            'center'
-
-                        ctx.textBaseline =
-                            'middle'
-
-                        ctx.fillText(
-                            'wc',
-                            36,
-                            36
-                        )
-                    }
-
-                    const img =
-                        new Image()
-
-                    img.src =
-                        canvas.toDataURL()
-
-                    img.onload = () =>
-                        resolve(img)
-                }
-            )
-        }
-
-        // ------------------------------------------------------
-        // ICONS
-        // ------------------------------------------------------
-
-        const greenIconId =
-            'wc-green'
-
-        const blueIconId =
-            'wc-blue'
-
-        if (
-            !map.value.hasImage(
-                greenIconId
-            )
-        ) {
-            createWcIcon('#10b981')
-                .then(img => {
-                    if (
-                        map.value &&
-                        !map.value.hasImage(
-                            greenIconId
-                        )
-                    ) {
-                        map.value.addImage(
-                            greenIconId,
-                            img
-                        )
-                    }
-                })
-        }
-
-        if (
-            !map.value.hasImage(
-                blueIconId
-            )
-        ) {
-            createWcIcon('#2563eb')
-                .then(img => {
-                    if (
-                        map.value &&
-                        !map.value.hasImage(
-                            blueIconId
-                        )
-                    ) {
-                        map.value.addImage(
-                            blueIconId,
-                            img
-                        )
-                    }
-                })
-        }
-
-        // ------------------------------------------------------
-        // GEOJSON
-        // ------------------------------------------------------
+        await Promise.all([
+            ensureIconExists(greenIconId, GREEN_COLOR),
+            ensureIconExists(blueIconId, BLUE_COLOR)
+        ])
 
         const geojsonData = {
             type: 'FeatureCollection',
-
             features: toilets
-                .filter(
-                    t =>
-                        t.latitude != null &&
-                        t.longitude != null
-                )
-                .map(t => ({
+                .filter((t) => t.latitude != null && t.longitude != null)
+                .map((t) => ({
                     type: 'Feature',
-
-                    properties: {
-                        id: t.id,
-                        type: t.type
-                    },
-
+                    properties: { id: t.id, type: t.type },
                     geometry: {
                         type: 'Point',
-
-                        coordinates: [
-                            t.longitude,
-                            t.latitude
-                        ]
+                        coordinates: [t.longitude, t.latitude]
                     }
                 }))
         }
 
-        // ------------------------------------------------------
-        // EXISTING SOURCE
-        // ------------------------------------------------------
-
-        const existingSource =
-            map.value.getSource(
-                sourceId
-            ) as
-                | maplibregl.GeoJSONSource
-                | undefined
-
+        const existingSource = map.value.getSource(SOURCE_IDS.toilets) as maplibregl.GeoJSONSource
         if (existingSource) {
-            existingSource.setData(
-                geojsonData as any
-            )
-
+            existingSource.setData(geojsonData as any)
             return
         }
 
-        // ------------------------------------------------------
-        // SOURCE
-        // ------------------------------------------------------
+        map.value.addSource(SOURCE_IDS.toilets, {
+            type: 'geojson',
+            data: geojsonData as any,
+            cluster: true,
+            clusterMaxZoom: 14,
+            clusterRadius: 50
+        })
 
-        map.value.addSource(
-            sourceId,
-            {
-                type: 'geojson',
-                data: geojsonData as any,
-
-                cluster: true,
-                clusterMaxZoom: 14,
-                clusterRadius: 50
-            }
-        )
-
-        // ------------------------------------------------------
-        // CLUSTERS
-        // ------------------------------------------------------
-
+        // Clusters Layer
         map.value.addLayer({
             id: 'clusters',
-
             type: 'circle',
-
-            source: sourceId,
-
-            filter: [
-                'has',
-                'point_count'
-            ],
-
+            source: SOURCE_IDS.toilets,
+            filter: ['has', 'point_count'],
             paint: {
                 'circle-color': [
                     'step',
-                    [
-                        'get',
-                        'point_count'
-                    ],
-                    '#10B981',
-                    5,
-                    '#059669',
-                    15,
-                    '#047857'
+                    ['number', ['coalesce', ['get', 'point_count'], 0]],
+                    GREEN_COLOR,
+                    5, '#059669',
+                    15, '#047857'
                 ],
-
                 'circle-radius': [
                     'interpolate',
                     ['linear'],
                     ['zoom'],
-
-                    10,
-                    [
-                        'step',
-                        [
-                            'get',
-                            'point_count'
-                        ],
-                        16,
-                        5,
-                        18,
-                        15,
-                        20
-                    ],
-
-                    14,
-                    [
-                        'step',
-                        [
-                            'get',
-                            'point_count'
-                        ],
-                        20,
-                        5,
-                        24,
-                        15,
-                        28
-                    ]
+                    10, ['step', ['number', ['coalesce', ['get', 'point_count'], 0]], 16, 5, 18, 15, 20],
+                    14, ['step', ['number', ['coalesce', ['get', 'point_count'], 0]], 20, 5, 24, 15, 28]
                 ],
-
                 'circle-stroke-width': 3,
-
-                'circle-stroke-color':
-                    '#ffffff'
+                'circle-stroke-color': '#ffffff'
             }
         })
 
-        // ------------------------------------------------------
-        // CLUSTER COUNT
-        // ------------------------------------------------------
-
+        // Cluster Count Layer
         map.value.addLayer({
             id: 'cluster-count',
-
             type: 'symbol',
-
-            source: sourceId,
-
-            filter: [
-                'has',
-                'point_count'
-            ],
-
+            source: SOURCE_IDS.toilets,
+            filter: ['has', 'point_count'],
             layout: {
-                'text-field': [
-                    'get',
-                    'point_count_abbreviated'
-                ],
-
-                'text-font': [
-                    'Noto Sans Bold'
-                ],
-
-                'text-size': [
-                    'interpolate',
-                    ['linear'],
-                    ['zoom'],
-                    10,
-                    12,
-                    14,
-                    14
-                ]
+                'text-field': ['get', 'point_count_abbreviated'],
+                'text-font': ['Noto Sans Bold'],
+                'text-size': ['interpolate', ['linear'], ['zoom'], 10, 12, 14, 14]
             },
-
-            paint: {
-                'text-color':
-                    '#ffffff'
-            }
+            paint: { 'text-color': '#ffffff' }
         })
 
-        // ------------------------------------------------------
-        // SINGLE TOILETS
-        // ------------------------------------------------------
-
+        // Single Toilets Layer
         map.value.addLayer({
             id: 'unclustered-point',
-
             type: 'symbol',
-
-            source: sourceId,
-
-            filter: [
-                '!',
-                [
-                    'has',
-                    'point_count'
-                ]
-            ],
-
+            source: SOURCE_IDS.toilets,
+            filter: ['!', ['has', 'point_count']],
             layout: {
-                'icon-image': [
-                    'match',
-                    ['get', 'type'],
-
-                    'public',
-                    blueIconId,
-
-                    greenIconId
-                ],
-
-                'icon-size':
-                    getIconSizeExpression(
-                        selectedToiletId.value
-                    ) as any,
-
-                'icon-allow-overlap':
-                    true,
-
-                'icon-ignore-placement':
-                    true
+                'icon-image': ['match', ['get', 'type'], 'public', blueIconId, greenIconId],
+                'icon-size': getIconSizeExpression(selectedToiletId.value) as any,
+                'icon-allow-overlap': true,
+                'icon-ignore-placement': true
             }
         })
 
-        // ======================================================
-        // INTERACTIVITY
-        // ======================================================
+        // Events
+        map.value.on('click', 'clusters', async (e) => {
+            const features = map.value!.queryRenderedFeatures(e.point, { layers: ['clusters'] })
+            const clusterId = features[0]?.properties?.cluster_id
+            if (clusterId == null) return
 
-        map.value.on(
-            'click',
-            'clusters',
-            async e => {
-                const features =
-                    map.value!.queryRenderedFeatures(
-                        e.point,
-                        {
-                            layers: [
-                                'clusters'
-                            ]
-                        }
-                    )
+            const source = map.value!.getSource(SOURCE_IDS.toilets) as maplibregl.GeoJSONSource
+            const clusterZoom = await source.getClusterExpansionZoom(clusterId)
+            const geometry = features[0].geometry as Point
 
-                if (!features.length) {
-                    return
-                }
+            map.value!.easeTo({
+                center: geometry.coordinates as [number, number],
+                zoom: clusterZoom + 0.5
+            })
+        })
 
-                const clusterId =
-                    features[0].properties
-                        ?.cluster_id
+        map.value.on('click', 'unclustered-point', (e) => {
+            const features = map.value!.queryRenderedFeatures(e.point, { layers: ['unclustered-point'] })
+            const id = features[0]?.properties?.id
+            if (!id) return
 
-                if (
-                    clusterId == null
-                ) {
-                    return
-                }
-
-                const source =
-                    map.value!.getSource(
-                        sourceId
-                    ) as
-                        maplibregl.GeoJSONSource
-
-                const clusterZoom =
-                    await source.getClusterExpansionZoom(
-                        clusterId
-                    )
-
-                const geometry =
-                    features[0].geometry as
-                        Point
-
-                map.value!.easeTo({
-                    center:
-                        geometry.coordinates as [
-                            number,
-                            number
-                        ],
-
-                    zoom:
-                        clusterZoom + 0.5
-                })
-            }
-        )
-
-        map.value.on(
-            'click',
-            'unclustered-point',
-            e => {
-                const features =
-                    map.value!.queryRenderedFeatures(
-                        e.point,
-                        {
-                            layers: [
-                                'unclustered-point'
-                            ]
-                        }
-                    )
-
-                if (
-                    !features.length
-                ) {
-                    return
-                }
-
-                const id =
-                    features[0].properties
-                        ?.id
-
-                if (!id) {
-                    return
-                }
-
-                setSelectedToiletId(
-                    id
-                )
-
-                onToiletClick(id)
-            }
-        )
-
-        // ------------------------------------------------------
-        // CURSOR
-        // ------------------------------------------------------
+            setSelectedToiletId(id)
+            onToiletClick(id)
+        })
 
         const setPointer = () => {
-            if (map.value) {
-                map.value
-                    .getCanvas()
-                    .style.cursor =
-                    'pointer'
-            }
+            if (map.value) map.value.getCanvas().style.cursor = 'pointer'
         }
-
         const resetCursor = () => {
-            if (map.value) {
-                map.value
-                    .getCanvas()
-                    .style.cursor =
-                    ''
-            }
+            if (map.value) map.value.getCanvas().style.cursor = ''
         }
 
-        map.value.on(
-            'mouseenter',
-            'clusters',
-            setPointer
-        )
-
-        map.value.on(
-            'mouseleave',
-            'clusters',
-            resetCursor
-        )
-
-        map.value.on(
-            'mouseenter',
-            'unclustered-point',
-            setPointer
-        )
-
-        map.value.on(
-            'mouseleave',
-            'unclustered-point',
-            resetCursor
-        )
+        map.value.on('mouseenter', 'clusters', setPointer)
+        map.value.on('mouseleave', 'clusters', resetCursor)
+        map.value.on('mouseenter', 'unclustered-point', setPointer)
+        map.value.on('mouseleave', 'unclustered-point', resetCursor)
     }
 
     // ==========================================================
-    // ROUTE BOUNDS
+    // GIS ANALYTICS & EXTRA LAYERS
     // ==========================================================
-
-    const fitRouteBounds = (
-        coords: LatLng[]
-    ) => {
-        if (
-            !map.value ||
-            coords.length === 0
-        ) {
-            return
-        }
-
-        const lats =
-            coords.map(c => c[0])
-
-        const lngs =
-            coords.map(c => c[1])
-
-        const minLat =
-            Math.min(...lats)
-
-        const maxLat =
-            Math.max(...lats)
-
-        const minLng =
-            Math.min(...lngs)
-
-        const maxLng =
-            Math.max(...lngs)
-
-        map.value.fitBounds(
-            [
-                [minLng, minLat],
-                [maxLng, maxLat]
-            ],
-
-            {
-                padding: {
-                    top: 100,
-                    bottom: 160,
-                    left: 60,
-                    right: 60
-                },
-
-                duration: 1200,
-                essential: true
-            }
-        )
-    }
-
-    // ==========================================================
-    // MARKERS
-    // ==========================================================
-
-    const clearToiletMarkers = () => {
-        toiletMarkers.value.forEach(
-            marker => marker.remove()
-        )
-
-        toiletMarkers.value = []
-    }
-
-    // ==========================================================
-    // GIS ANALYTICS LAYERS
-    // ==========================================================
-
     const renderAnalyticsBuffers = (geojsonData: any) => {
         if (!map.value) return
-
-        const sourceId = 'analytics-buffers'
-        const existingSource = map.value.getSource(sourceId) as maplibregl.GeoJSONSource
+        const existingSource = map.value.getSource(SOURCE_IDS.buffers) as maplibregl.GeoJSONSource
 
         if (existingSource) {
             existingSource.setData(geojsonData)
             return
         }
 
-        map.value.addSource(sourceId, {
-            type: 'geojson',
-            data: geojsonData
-        })
+        map.value.addSource(SOURCE_IDS.buffers, { type: 'geojson', data: geojsonData })
 
-        // Напівпрозоре заповнення полігону
         map.value.addLayer(
             {
                 id: 'analytics-buffers-fill',
                 type: 'fill',
-                source: sourceId,
-                paint: {
-                    'fill-color': '#6366f1',
-                    'fill-opacity': 0.18
-                }
+                source: SOURCE_IDS.buffers,
+                paint: { 'fill-color': '#6366f1', 'fill-opacity': 0.18 }
             },
-            'clusters' // 👈 Малюємо ШАР ПІД кластерами та точками туалетів
+            'clusters'
         )
 
-        // Контур полігону
         map.value.addLayer(
             {
                 id: 'analytics-buffers-line',
                 type: 'line',
-                source: sourceId,
+                source: SOURCE_IDS.buffers,
                 paint: {
                     'line-color': '#4f46e5',
                     'line-width': 1.5,
@@ -934,23 +363,13 @@ export function useMap() {
 
     const clearAnalyticsBuffers = () => {
         if (!map.value) return
-
-        if (map.value.getLayer('analytics-buffers-fill')) {
-            map.value.removeLayer('analytics-buffers-fill')
-        }
-        if (map.value.getLayer('analytics-buffers-line')) {
-            map.value.removeLayer('analytics-buffers-line')
-        }
-        if (map.value.getSource('analytics-buffers')) {
-            map.value.removeSource('analytics-buffers')
-        }
+        if (map.value.getLayer('analytics-buffers-fill')) map.value.removeLayer('analytics-buffers-fill')
+        if (map.value.getLayer('analytics-buffers-line')) map.value.removeLayer('analytics-buffers-line')
+        if (map.value.getSource(SOURCE_IDS.buffers)) map.value.removeSource(SOURCE_IDS.buffers)
     }
 
-    // Отримати або створити GeoJSON шар віртуальних маркерів
     const renderVirtualMarkers = (virtualToilets: Toilet[]) => {
         if (!map.value) return
-
-        const sourceId = 'virtual-toilets-source'
 
         const geojsonData = {
             type: 'FeatureCollection',
@@ -958,46 +377,33 @@ export function useMap() {
                 .filter((t) => t.longitude != null && t.latitude != null)
                 .map((t) => ({
                     type: 'Feature',
-                    geometry: {
-                        type: 'Point',
-                        coordinates: [t.longitude!, t.latitude!]
-                    },
-                    properties: {id: t.id}
+                    geometry: { type: 'Point', coordinates: [t.longitude!, t.latitude!] },
+                    properties: { id: t.id }
                 }))
         }
 
-        const existingSource = map.value.getSource(sourceId) as maplibregl.GeoJSONSource
-
+        const existingSource = map.value.getSource(SOURCE_IDS.virtual) as maplibregl.GeoJSONSource
         if (existingSource) {
             existingSource.setData(geojsonData as any)
             return
         }
 
-        map.value.addSource(sourceId, {
-            type: 'geojson',
-            data: geojsonData as any
-        })
+        map.value.addSource(SOURCE_IDS.virtual, { type: 'geojson', data: geojsonData as any })
 
-        // Зовнішнє сяйво для віртуальної точки (помаранчеве)
         map.value.addLayer({
             id: 'virtual-toilets-halo',
             type: 'circle',
-            source: sourceId,
-            paint: {
-                'circle-radius': 14,
-                'circle-color': '#f97316',
-                'circle-opacity': 0.35
-            }
+            source: SOURCE_IDS.virtual,
+            paint: { 'circle-radius': 14, 'circle-color': ORANGE_COLOR, 'circle-opacity': 0.35 }
         })
 
-        // Основне ядро віртуальної точки
         map.value.addLayer({
             id: 'virtual-toilets-point',
             type: 'circle',
-            source: sourceId,
+            source: SOURCE_IDS.virtual,
             paint: {
                 'circle-radius': 7,
-                'circle-color': '#f97316',
+                'circle-color': ORANGE_COLOR,
                 'circle-stroke-width': 2,
                 'circle-stroke-color': '#ffffff'
             }
@@ -1008,50 +414,36 @@ export function useMap() {
         if (!map.value) return
         if (map.value.getLayer('virtual-toilets-halo')) map.value.removeLayer('virtual-toilets-halo')
         if (map.value.getLayer('virtual-toilets-point')) map.value.removeLayer('virtual-toilets-point')
-        if (map.value.getSource('virtual-toilets-source')) map.value.removeSource('virtual-toilets-source')
+        if (map.value.getSource(SOURCE_IDS.virtual)) map.value.removeSource(SOURCE_IDS.virtual)
     }
 
-    // ==========================================================
-    // CONTROL POINTS LAYERS
-    // ==========================================================
-
-    // Шар контрольних точок (Demand Points)
     const renderControlPointsLayer = (controlPoints: any[]) => {
         if (!map.value) return
 
-        const sourceId = 'control-points-source'
         const geojsonData = {
             type: 'FeatureCollection',
             features: controlPoints.map((cp) => ({
                 type: 'Feature',
-                geometry: {
-                    type: 'Point',
-                    coordinates: [cp.longitude, cp.latitude]
-                },
+                geometry: { type: 'Point', coordinates: [cp.longitude, cp.latitude] },
                 properties: { name: cp.name, id: cp.id }
             }))
         }
 
-        const existingSource = map.value.getSource(sourceId) as maplibregl.GeoJSONSource
-
+        const existingSource = map.value.getSource(SOURCE_IDS.control) as maplibregl.GeoJSONSource
         if (existingSource) {
             existingSource.setData(geojsonData as any)
             return
         }
 
-        map.value.addSource(sourceId, {
-            type: 'geojson',
-            data: geojsonData as any
-        })
+        map.value.addSource(SOURCE_IDS.control, { type: 'geojson', data: geojsonData as any })
 
-        // Маркер контрольної точки
         map.value.addLayer({
             id: 'control-points-layer',
             type: 'circle',
-            source: sourceId,
+            source: SOURCE_IDS.control,
             paint: {
                 'circle-radius': 6,
-                'circle-color': '#06b6d4', // Cyan/Teal
+                'circle-color': CYAN_COLOR,
                 'circle-stroke-width': 2,
                 'circle-stroke-color': '#ffffff'
             }
@@ -1061,19 +453,13 @@ export function useMap() {
     const clearControlPointsLayer = () => {
         if (!map.value) return
         if (map.value.getLayer('control-points-layer')) map.value.removeLayer('control-points-layer')
-        if (map.value.getSource('control-points-source')) map.value.removeSource('control-points-source')
+        if (map.value.getSource(SOURCE_IDS.control)) map.value.removeSource(SOURCE_IDS.control)
     }
-
-    // ==========================================================
-    // RETURN
-    // ==========================================================
 
     return {
         map,
         zoom,
         center,
-        toiletMarkers,
-        userLocationMarker,
         temporaryClickedCoords,
         selectedToiletId,
         setSelectedToiletId,
@@ -1081,25 +467,16 @@ export function useMap() {
         initMap,
         flyToCoords,
         fitRouteBounds,
-        clearToiletMarkers,
-
-        // Coordinate helpers
         lngLatToLatLng,
         latLngToLngLat,
         getMapCenter,
         getCenterLatLng,
-
-        // Manual selection
         syncTemporaryCoordsWithCenter,
         clearTemporaryCoords,
-
-        // GIS Analytics
         renderAnalyticsBuffers,
         clearAnalyticsBuffers,
         renderVirtualMarkers,
         clearVirtualMarkers,
-
-        // Control Points
         renderControlPointsLayer,
         clearControlPointsLayer
     }

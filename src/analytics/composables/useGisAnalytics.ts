@@ -1,16 +1,16 @@
-import { ref } from 'vue'
-import type { Toilet } from '../../types'
-import { createBufferPolygons } from '../utils/buffers'
-import { calculateCircuity } from '../utils/circuity'
-import { calculateGisStats, exportGisReportCsv } from '../utils/stats'
-import { DNIPRO_CONTROL_POINTS } from '../data/controlPoints'
+import {ref} from 'vue'
+import type {Toilet} from '../../types'
+import {createBufferPolygons} from '../utils/buffers'
+import {calculateCircuity} from '../utils/circuity'
+import {calculateGisStats, exportGisReportCsv} from '../utils/stats'
+import {DNIPRO_CONTROL_POINTS} from '../data/controlPoints'
 import {
+    type AccessibilitySummary,
     evaluateControlPointsAccessibilityNetwork,
     exportAccessibilityResultsCsv,
-    type AccessibilitySummary,
 } from '../utils/accessibility'
-import { runCandidateBenchmark } from '../utils/accessibilityBenchmark'
-import { evaluateCandidate, generateCandidateGrid } from '../utils/optimization'
+import {runCandidateBenchmark} from '../utils/accessibilityBenchmark'
+import {evaluateCandidate, generateCandidateGrid} from '../utils/optimization'
 import type {OptimizationCandidate, OptimizationSummary} from '../types/optimizationType'
 
 export function useGisAnalytics() {
@@ -54,11 +54,10 @@ export function useGisAnalytics() {
         const combinedToilets = [...realToilets, ...virtualToilets.value]
 
         try {
-            const stats = await evaluateControlPointsAccessibilityNetwork(
+            accessibilityNetworkStats.value = await evaluateControlPointsAccessibilityNetwork(
                 DNIPRO_CONTROL_POINTS,
                 combinedToilets
             )
-            accessibilityNetworkStats.value = stats
         } finally {
             isCalculatingNetwork.value = false
         }
@@ -77,46 +76,35 @@ export function useGisAnalytics() {
     const optimizeOneToiletPlacement = async (
         realToilets: Toilet[],
         candidates: Array<{ latitude: number; longitude: number }>,
+        baseline: AccessibilitySummary,
         onProgress?: (percent: number) => void
     ): Promise<OptimizationCandidate[]> => {
-        const baseline = await evaluateControlPointsAccessibilityNetwork(
-            DNIPRO_CONTROL_POINTS,
-            realToilets
-        )
-
         const results: OptimizationCandidate[] = []
-        const BATCH_SIZE = 5
 
-        for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
-            const batch = candidates.slice(i, i + BATCH_SIZE)
+        // Послідовний прохід по кандидатах для запобігання rate-limit / 502 OSRM
+        for (let i = 0; i < candidates.length; i++) {
+            const candidate = candidates[i]
 
-            // Паралельний розрахунок OSRM для 5 кандидатів одночасно
-            await Promise.all(
-                batch.map(async (candidate) => {
-                    const virtualToilet: Toilet = {
-                        id: `optimization-${candidate.latitude}-${candidate.longitude}`,
-                        type: 'public', // Для алгоритму важливі лише координати
-                        status: 'virtual',
-                        latitude: candidate.latitude,
-                        longitude: candidate.longitude,
-                        address: 'Optimization candidate',
-                    }
+            const virtualToilet: Toilet = {
+                id: `optimization-${candidate.latitude}-${candidate.longitude}`,
+                type: 'public',
+                status: 'virtual',
+                latitude: candidate.latitude,
+                longitude: candidate.longitude,
+                address: 'Optimization candidate',
+            }
 
-                    const result = await evaluateControlPointsAccessibilityNetwork(
-                        DNIPRO_CONTROL_POINTS,
-                        [...realToilets, virtualToilet]
-                    )
-
-                    results.push(
-                        evaluateCandidate(candidate.latitude, candidate.longitude, baseline, result)
-                    )
-                })
+            const result = await evaluateControlPointsAccessibilityNetwork(
+                DNIPRO_CONTROL_POINTS,
+                [...realToilets, virtualToilet]
             )
 
-            // Оновлюємо прогрес після кожного виконаного батчу
+            results.push(
+                evaluateCandidate(candidate.latitude, candidate.longitude, baseline, result)
+            )
+
             if (onProgress) {
-                const processedCount = Math.min(i + BATCH_SIZE, candidates.length)
-                onProgress(Math.round((processedCount / candidates.length) * 100))
+                onProgress(Math.round(((i + 1) / candidates.length) * 100))
             }
         }
 
@@ -131,22 +119,23 @@ export function useGisAnalytics() {
     const runOptimizationTest = async (
         realToilets: Toilet[]
     ): Promise<OptimizationSummary | null> => {
-        // Вмикаємо лоадер
         isOptimizing.value = true
         optimizationProgress.value = 0
 
         try {
             const candidates = generateCandidateGrid(48.45, 48.48, 35.0, 35.08, 0.01)
 
+            // 1. Обчислюємо baseline один раз тут
             const baseline = await evaluateControlPointsAccessibilityNetwork(
                 DNIPRO_CONTROL_POINTS,
                 realToilets
             )
 
-            // Передаємо оновлення optimizationProgress у колбек
+            // 2. Передаємо вже готовий baseline у функцію
             const results = await optimizeOneToiletPlacement(
                 realToilets,
                 candidates,
+                baseline,
                 (progress) => {
                     optimizationProgress.value = progress
                 }
@@ -171,7 +160,6 @@ export function useGisAnalytics() {
             console.error('Optimization error:', error)
             return null
         } finally {
-            // Гарантовано вимикаємо лоадер після завершення або у разі помилки
             isOptimizing.value = false
         }
     }
