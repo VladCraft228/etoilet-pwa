@@ -123,8 +123,7 @@ export function useGisAnalytics() {
         optimizationProgress.value = 0
 
         try {
-            const candidates = generateCandidateGrid(48.45, 48.48, 35.0, 35.08, 0.01)
-
+            const candidates = generateCandidateGrid(48.39, 48.54, 34.91, 35.09, 0.02)
             // 1. Обчислюємо baseline один раз тут
             const baseline = await evaluateControlPointsAccessibilityNetwork(
                 DNIPRO_CONTROL_POINTS,

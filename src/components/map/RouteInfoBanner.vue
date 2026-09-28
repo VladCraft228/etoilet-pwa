@@ -55,8 +55,11 @@ const circuityMetrics = computed(() => {
           </div>
         </div>
 
-        <button @click="emit('close')" class="bg-slate-100 hover:bg-slate-200 text-slate-600 p-2 rounded-full transition-colors active:scale-95 cursor-pointer shrink-0">
-          <span class="material-symbols-outlined text-[20px] block">close</span>
+        <button
+            @click="emit('close')"
+            class="flex items-center justify-center w-9 h-9 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-full transition-colors active:scale-95 cursor-pointer shrink-0"
+        >
+          <span class="material-symbols-outlined text-[20px] leading-none flex items-center justify-center">close</span>
         </button>
       </div>
 

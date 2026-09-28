@@ -35,11 +35,9 @@ import RelocateOverlay from './components/map/RelocateOverlay.vue'
 
 import type {Toilet} from './types.ts'
 import {useGisAnalytics} from "./analytics/composables/useGisAnalytics.ts";
-import AnalyticsPanel from "./analytics/components/AnalyticsPanel.vue";
 import ReportToiletModal from "./components/features/ReportToiletModal.vue";
 import {getStraightDistance} from "./components/utils/geo.ts";
 import type {OptimizationCandidate} from "./analytics/types/optimizationType.ts";
-import OptimizationLayer from "./analytics/components/OptimizationLayer.vue";
 
 // --- ЛІНИВІ КОМПОНЕНТИ ---
 const LocationPrompt = defineAsyncComponent(
@@ -60,6 +58,13 @@ const WelcomeModal = defineAsyncComponent(
 
 const RouteChoiceModal = defineAsyncComponent(
     () => import('./components/features/RouteChoiceModal.vue')
+)
+
+const AnalyticsPanel = defineAsyncComponent(
+    () => import('./analytics/components/AnalyticsPanel.vue')
+)
+const OptimizationLayer = defineAsyncComponent(
+    () => import('./analytics/components/OptimizationLayer.vue')
 )
 
 // ==========================================================
@@ -665,14 +670,17 @@ const handlePopupRoute = () => {
 const handleGpsLocation = () => {
   showLocationPrompt.value = false
 
-  // Якщо користувач був у manual mode, скасовуємо його
   if (isManualSelectionMode.value) {
     isManualSelectionMode.value = false
     clearTemporaryCoords()
   }
 
-  // СЦЕНАРІЙ 1: GPS працює, але юзер зрушив карту (камера відв'язана).
-  // Повертаємо камеру до юзера, НЕ зупиняючи фоновий GPS!
+  // Якщо локація була встановлена вручну раніше — просто центруємося на ній
+  if (!isGpsTrackingActive.value && userLocation.value) {
+    flyToCoords(userLocation.value[1], userLocation.value[0], 16)
+  }
+
+  // Якщо GPS вже працює, але карта була зрушена — повертаємо камеру
   if (isGpsTrackingActive.value && !isFollowUserActive.value) {
     isFollowUserActive.value = true
     if (userLocationMarker) {
@@ -682,8 +690,7 @@ const handleGpsLocation = () => {
     return
   }
 
-  // СЦЕНАРІЙ 2: Повторний клік, коли і GPS працює, і камера вже відцентрована.
-  // Повністю вимикаємо GPS.
+  // Повторний клік при активному спостереженні вимикає трекінг
   if (isGpsTrackingActive.value && isFollowUserActive.value) {
     stopTrackingLocation()
     isGpsTrackingActive.value = false
@@ -691,22 +698,28 @@ const handleGpsLocation = () => {
     return
   }
 
-  // СЦЕНАРІЙ 3: Запуск GPS з нуля
   isGpsTrackingActive.value = true
   isFollowUserActive.value = true
 
   startTrackingLocation(
       (lat, lng) => {
-        // Маркер та відстані у тобі оновлюються автоматично всередині startTrackingLocation,
-        // а камеру рухаємо ТІЛЬКИ якщо увімкнено слідування:
         if (isFollowUserActive.value) {
           flyToCoords(lng, lat, 16)
         }
+
+        // Якщо пошук викликала кнопка near_me — одразу летимо до вбиральні
+        if (pendingFindNearest.value) {
+          findAndSelectNearest(lat, lng)
+          pendingFindNearest.value = false
+        }
       },
       () => {
-        // Callback помилки GPS
+        // ПОМИЛКА GPS: відхилено, недоступно або заблоковано в системі
         isGpsTrackingActive.value = false
         isFollowUserActive.value = false
+
+        // Замість глухого кута відкриваємо вікно вибору локації:
+        showLocationPrompt.value = true
       }
   )
 }
@@ -733,14 +746,62 @@ const handleManualLocation = () => {
 const confirmManualLocation = () => {
   if (!map.value) return
 
-  // Єдине джерело істини — поточний центр карти під прицілом
   const mapCenter = map.value.getCenter()
+  const lat = mapCenter.lat
+  const lng = mapCenter.lng
 
-  // Записуємо у форматі застосунку [lat, lng]
-  userLocation.value = [mapCenter.lat, mapCenter.lng]
-
-  // Вимикаємо режим
+  userLocation.value = [lat, lng]
   isManualSelectionMode.value = false
+
+  // Якщо користувач прийшов сюди через кнопку near_me — одразу ведемо до точки!
+  if (pendingFindNearest.value) {
+    findAndSelectNearest(lat, lng)
+    pendingFindNearest.value = false
+  }
+}
+
+// ==========================================================
+// QUICK TOILET SEARCH
+// ==========================================================
+const pendingFindNearest = ref(false)
+
+const findAndSelectNearest = (lat: number, lng: number) => {
+  const availableToilets = approvedToilets.value.filter(
+      (t) => typeof t.latitude === 'number' && typeof t.longitude === 'number'
+  )
+
+  if (!availableToilets.length) {
+    toast.warning('Наразі немає підтверджених вбиралень на мапі')
+    return
+  }
+
+  let nearestToilet: Toilet | null = null
+  let minDistance = Infinity
+
+  for (const toilet of availableToilets) {
+    const dist = getStraightDistance(lat, lng, toilet.latitude!, toilet.longitude!)
+    if (dist < minDistance) {
+      minDistance = dist
+      nearestToilet = toilet
+    }
+  }
+
+  if (nearestToilet) {
+    selectToiletById(nearestToilet.id)
+    toast.success(`Найближча вбиральня (~${Math.round(minDistance)} м)`)
+  }
+}
+
+const handleFindNearestToilet = () => {
+  // Якщо локація вже є — одразу летимо до туалету
+  if (userLocation.value) {
+    findAndSelectNearest(userLocation.value[0], userLocation.value[1])
+    return
+  }
+
+  // Якщо локації ще немає — фіксуємо намір і запускаємо пошук/запит позиції
+  pendingFindNearest.value = true
+  handleGpsLocation()
 }
 
 // ==========================================================
@@ -842,6 +903,7 @@ const handleFormSubmit = async (
 const cancelManualLocation = () => {
   clearTemporaryCoords()
   isManualSelectionMode.value = false
+  pendingFindNearest.value = false
 }
 
 const cancelToiletLocation = () => {
@@ -879,37 +941,22 @@ const handleAddressSelected = (
       lng: number
     }
 ) => {
-  isAddressSearchOpen.value =
-      false
+  isAddressSearchOpen.value = false
 
-  /**
-   * Якщо користувач був у manual mode,
-   * пошук адреси завершує цей режим.
-   */
-  if (
-      addressSearchContext.value ===
-      'user'
-  ) {
-    isManualSelectionMode.value =
-        false
-
+  if (addressSearchContext.value === 'user') {
+    isManualSelectionMode.value = false
     clearTemporaryCoords()
-  }
 
-  flyToCoords(
-      result.lng,
-      result.lat,
-      17
-  )
+    flyToCoords(result.lng, result.lat, 17)
+    userLocation.value = [result.lat, result.lng]
 
-  if (
-      addressSearchContext.value ===
-      'user'
-  ) {
-    userLocation.value = [
-      result.lat,
-      result.lng
-    ]
+    // Якщо адреса вводилась у рамках швидкого пошуку найближчої:
+    if (pendingFindNearest.value) {
+      findAndSelectNearest(result.lat, result.lng)
+      pendingFindNearest.value = false
+    }
+  } else {
+    flyToCoords(result.lng, result.lat, 17)
   }
 }
 
@@ -1916,8 +1963,10 @@ onUnmounted(() => {
     <AppNavigation
         :current-screen="currentScreen"
         :is-admin="isAdmin"
+        :is-analytics-active="isAnalyticsActive"
         @navigate="navigateTo"
         @logout="onLogout"
+        @toggle-analytics="handleToggleAnalytics"
     />
 
     <!-- MAP -->
@@ -2108,6 +2157,7 @@ onUnmounted(() => {
 
       <!-- Шар кандидатів оптимізації -->
       <OptimizationLayer
+          v-if="isAnalyticsActive"
           :map="map"
           :candidates="topCandidates"
           :selected-index="selectedCandidateIndex"
@@ -2116,38 +2166,38 @@ onUnmounted(() => {
       />
 
 
+      <!-- КОНТРОЛИ НА МАПІ -->
       <MapControls
           v-show="
-          !isManualSelectionMode &&
-          !isPickingToiletMode &&
-          !(
-            activeToiletForPopup &&
-            !isDesktop
-          )
-        "
+        !isManualSelectionMode &&
+        !isPickingToiletMode &&
+        !(
+          activeToiletForPopup &&
+          !isDesktop
+        )
+      "
           :is-locating="
-            isLocating ||
-            isRouting
-          "
-          @locate="showLocationPrompt = true"
+          isLocating ||
+          isRouting
+        "
+          @locate="handleGpsLocation"
+          @find-nearest="handleFindNearestToilet"
           @add="startPickingToiletLocation"
           @zoom-in="
-            map?.zoomIn({
-              duration: 300
-            })
-          "
+          map?.zoomIn({
+            duration: 300
+          })
+        "
           @zoom-out="
-            map?.zoomOut({
-              duration: 300
-            })
-          "
+          map?.zoomOut({
+            duration: 300
+          })
+        "
           @compass="
-            map?.resetNorthPitch({
-              duration: 500
-            })
-          "
-          :is-analytics-active="isAnalyticsActive"
-          @toggle-analytics="handleToggleAnalytics"
+          map?.resetNorthPitch({
+            duration: 500
+          })
+        "
       />
     </div>
 

@@ -7,114 +7,58 @@ export interface ControlPoint {
 }
 
 export const DNIPRO_CONTROL_POINTS: ControlPoint[] = [
-    // 🌊 Набережна та Рекреаційні зони
-    {
-        id: 'cp-1',
-        name: 'Фестивальний причал (Куля)',
-        latitude: 48.46663,
-        longitude: 35.0664,
-        category: 'embankment'
-    },
-    {
-        id: 'cp-2',
-        name: 'Вхід на Монастирський острів (після мосту)',
-        latitude: 48.46541,
-        longitude: 35.07376,
-        category: 'park'
-    },
-    {
-        id: 'cp-3',
-        name: 'Пляж Монастирського острова',
-        latitude: 48.46335,
-        longitude: 35.08078,
-        category: 'park'
-    },
-    {
-        id: 'cp-4',
-        name: 'Оглядовий майданчик парку Шевченка',
-        latitude: 48.46494,
-        longitude: 35.06873,
-        category: 'park'
-    },
-    {
-        id: 'cp-5',
-        name: 'Сквер Прибрежний (Набережна Перемоги)',
-        latitude: 48.43388,
-        longitude: 35.07002,
-        category: 'embankment'
-    },
-    {
-        id: 'cp-6',
-        name: 'Бульвар Слави (Перемога-6)',
-        latitude: 48.41312,
-        longitude: 35.06524,
-        category: 'pedestrian'
-    },
-
-    // 🚌 Транспортні вузли
-    {
-        id: 'cp-7',
-        name: 'Площа Вокзальна (Головний вокзал)',
-        latitude: 48.47558,
-        longitude: 35.01593,
-        category: 'transport'
-    },
-    {
-        id: 'cp-8',
-        name: 'Центральний Автовокзал',
-        latitude: 48.47454,
-        longitude: 35.00871,
-        category: 'transport'
-    },
-    {
-        id: 'cp-9',
-        name: 'Підстанція (ТРЦ Дафі / пр. Науки)',
-        latitude: 48.42575,
-        longitude: 35.02324,
-        category: 'transport'
-    },
-
-    // 🏙️ Пішохідні зони та Центр
-    {
-        id: 'cp-10',
-        name: 'Європейська площа',
-        latitude: 48.46570,
-        longitude: 35.04736,
-        category: 'pedestrian'
-    },
-    {
-        id: 'cp-11',
-        name: 'Катеринославський бульвар',
-        latitude: 48.46108,
-        longitude: 35.05014,
-        category: 'pedestrian'
-    },
-    {
-        id: 'cp-12',
-        name: 'Парк Глоби (Центральна алея)',
-        latitude: 48.47035,
-        longitude: 35.03075,
-        category: 'park'
-    },
-    {
-        id: 'cp-13',
-        name: 'Площа Героїв Майдану / Passage',
-        latitude: 48.46448,
-        longitude: 35.04743,
-        category: 'shopping'
-    },
-    {
-        id: 'cp-14',
-        name: 'ТРЦ МОСТ-Сіті (Вхід)',
-        latitude: 48.46621,
-        longitude: 35.05021,
-        category: 'shopping'
-    },
-    {
-        id: 'cp-15',
-        name: 'Дніпровський Цирк',
-        latitude: 48.46843,
-        longitude: 35.05358,
-        category: 'pedestrian'
-    }
+    { id: 'cp-1', name: 'Фестивальний причал (Куля)', category: 'embankment', latitude: 48.46663, longitude: 35.0664 },
+    { id: 'cp-2', name: 'Вхід на Монастирський острів (після мосту)', category: 'park', latitude: 48.46541, longitude: 35.07376 },
+    { id: 'cp-3', name: 'Пляж Монастирського острова', category: 'park', latitude: 48.46335, longitude: 35.08078 },
+    { id: 'cp-4', name: 'Сквер Прибрежний (Набережна Перемоги)', category: 'park', latitude: 48.43388, longitude: 35.07002 },
+    { id: 'cp-5', name: 'Бульвар Слави (Перемога-6)', category: 'pedestrian', latitude: 48.41312, longitude: 35.06524 },
+    { id: 'cp-6', name: 'Площа Вокзальна (Головний вокзал)', category: 'transport', latitude: 48.47558, longitude: 35.01593 },
+    { id: 'cp-7', name: 'Центральний Автовокзал', category: 'transport', latitude: 48.47454, longitude: 35.00871 },
+    { id: 'cp-8', name: 'Підстанція (ТРЦ Дафі / пр. Науки)', category: 'transport', latitude: 48.42575, longitude: 35.02324 },
+    { id: 'cp-9', name: 'Європейська площа', category: 'pedestrian', latitude: 48.46570, longitude: 35.04736 },
+    { id: 'cp-10', name: 'Катеринославський бульвар', category: 'pedestrian', latitude: 48.46108, longitude: 35.05014 },
+    { id: 'cp-11', name: 'Парк Глоби (Центральна алея)', category: 'park', latitude: 48.47035, longitude: 35.03075 },
+    { id: 'cp-12', name: 'Площа Героїв Майдану / Passage', category: 'shopping', latitude: 48.46448, longitude: 35.04743 },
+    { id: 'cp-13', name: 'ТРЦ МОСТ-Сіті (Вхід)', category: 'shopping', latitude: 48.46621, longitude: 35.05021 },
+    { id: 'cp-14', name: 'Дніпровський Цирк', category: 'pedestrian', latitude: 48.46843, longitude: 35.05358 },
+    { id: 'cp-15', name: 'Парк «Ракета»', category: 'park', latitude: 48.46591, longitude: 35.02878 },
+    { id: 'cp-16', name: 'Парк «Зелений Гай»', category: 'park', latitude: 48.43796, longitude: 35.00875 },
+    { id: 'cp-17', name: 'Парк Сагайдак', category: 'park', latitude: 48.48617, longitude: 35.05600 },
+    { id: 'cp-18', name: 'Стела Вічної Слави', category: 'pedestrian', latitude: 48.45137, longitude: 35.07130 },
+    { id: 'cp-19', name: 'Парк імені Юрія Гагаріна', category: 'park', latitude: 48.43299, longitude: 35.04118 },
+    { id: 'cp-20', name: 'Парк імені Писаржевського', category: 'park', latitude: 48.43318, longitude: 35.01270 },
+    { id: 'cp-21', name: 'Парк імені Богдана Хмельницького', category: 'park', latitude: 48.43573, longitude: 35.02009 },
+    { id: 'cp-22', name: 'Парк 40-річчя визволення Дніпра', category: 'park', latitude: 48.42977, longitude: 35.01680 },
+    { id: 'cp-23', name: 'Парк імені Володі Дубініна', category: 'park', latitude: 48.42470, longitude: 35.03570 },
+    { id: 'cp-24', name: 'Севастопольський парк', category: 'park', latitude: 48.44739, longitude: 35.06029 },
+    { id: 'cp-25', name: 'Новокодацький парк', category: 'park', latitude: 48.48505, longitude: 34.94567 },
+    { id: 'cp-26', name: 'Парк Шевченка (Оглядовий майданчик)', category: 'park', latitude: 48.46495, longitude: 35.06874 },
+    { id: 'cp-27', name: 'Фонтан "Закоханих" (Оглядовий майданчик)', category: 'pedestrian', latitude: 48.48190, longitude: 35.06216 },
+    { id: 'cp-28', name: 'Фонтан "Ювілейний" (Оглядовий майданчик)', category: 'pedestrian', latitude: 48.46844, longitude: 35.03097 },
+    { id: 'cp-29', name: 'Сквер імені Івана Старова', category: 'park', latitude: 48.45697, longitude: 35.06502 },
+    { id: 'cp-30', name: 'Сквер Героїв', category: 'park', latitude: 48.46597, longitude: 35.03186 },
+    { id: 'cp-31', name: 'Сквер біля Оперного театру', category: 'pedestrian', latitude: 48.47029, longitude: 35.03707 },
+    { id: 'cp-32', name: 'Успенська площа', category: 'pedestrian', latitude: 48.46530, longitude: 35.05585 },
+    { id: 'cp-33', name: 'Бульвар Яворницького', category: 'pedestrian', latitude: 48.46009, longitude: 35.06881 },
+    { id: 'cp-34', name: 'Сквер імені Галини Андрусенко', category: 'park', latitude: 48.43874, longitude: 35.04964 },
+    { id: 'cp-35', name: 'Сквер Ліквідаторів Чорнобильської катастрофи', category: 'park', latitude: 48.44956, longitude: 35.03027 },
+    { id: 'cp-36', name: 'Сквер імені Михайла Янгеля', category: 'park', latitude: 48.42820, longitude: 35.00676 },
+    { id: 'cp-37', name: 'Дитячий сквер "Чижик"', category: 'park', latitude: 48.41883, longitude: 35.00377 },
+    { id: 'cp-38', name: 'Дніпровський театр опери та балету', category: 'pedestrian', latitude: 48.47021, longitude: 35.03810 },
+    { id: 'cp-39', name: 'Дніпровський драматичний театр імені Т. Шевченка', category: 'pedestrian', latitude: 48.46815, longitude: 35.04383 },
+    { id: 'cp-40', name: 'ТРЦ "Аполло"', category: 'shopping', latitude: 48.43281, longitude: 35.00234 },
+    { id: 'cp-41', name: 'ТРЦ "Комунар"', category: 'shopping', latitude: 48.48445, longitude: 34.92248 },
+    { id: 'cp-42', name: 'ТРЦ "NEO PLAZA"', category: 'shopping', latitude: 48.43884, longitude: 35.05139 },
+    { id: 'cp-43', name: 'ТРЦ "Караван"', category: 'shopping', latitude: 48.52963, longitude: 35.03078 },
+    { id: 'cp-44', name: 'ТЦ "Наша Правда"', category: 'shopping', latitude: 48.49877, longitude: 35.06944 },
+    { id: 'cp-45', name: 'ТРЦ "Дафі"', category: 'shopping', latitude: 48.42529, longitude: 35.02189 },
+    { id: 'cp-46', name: 'ТРЦ "TERRA" (Тополя)', category: 'shopping', latitude: 48.40103, longitude: 35.03262 },
+    { id: 'cp-47', name: 'ТРЦ "TERRA" (Богдана Хмельницького)', category: 'shopping', latitude: 48.40760, longitude: 35.00014 },
+    { id: 'cp-48', name: 'Станція метро "Проспект Свободи"', category: 'transport', latitude: 48.48035, longitude: 34.94503 },
+    { id: 'cp-49', name: 'Станція метро "Покровська"', category: 'transport', latitude: 48.47933, longitude: 34.92675 },
+    { id: 'cp-50', name: 'Сквер імені Назара Боровицького', category: 'park', latitude: 48.44841, longitude: 35.02872 },
+    { id: 'cp-51', name: 'Набережна Заводська', category: 'embankment', latitude: 48.48632, longitude: 34.92292 },
+    { id: 'cp-52', name: 'Січеславська набережна', category: 'embankment', latitude: 48.47095, longitude: 35.04933 },
+    { id: 'cp-53', name: 'Набережна Перемоги (пішохідна зона)', category: 'pedestrian', latitude: 48.44121, longitude: 35.07210 },
+    { id: 'cp-54', name: 'Придніпровський парк', category: 'park', latitude: 48.39952, longitude: 35.13197 }
 ]
