@@ -13,17 +13,51 @@ import {runCandidateBenchmark} from '../utils/accessibilityBenchmark'
 import {evaluateCandidate, generateCandidateGrid} from '../utils/optimization'
 import type {OptimizationCandidate, OptimizationSummary} from '../types/optimizationType'
 
+// ==========================================
+// 1. УТИЛІТИ КЕШУВАННЯ В LOCALSTORAGE
+// ==========================================
+
+const CACHE_KEYS = {
+    ACCESSIBILITY: 'etoilet_gis_accessibility_stats',
+    OPTIMIZATION: 'etoilet_gis_optimization_summary',
+    OSRM_ROUTES: 'etoilet_osrm_network_cache'
+} as const
+
+// Безпечне читання з localStorage (із захистом від Incognito та помилок парсингу)
+function loadFromStorage<T>(key: string): T | null {
+    try {
+        const raw = localStorage.getItem(key)
+        return raw ? (JSON.parse(raw) as T) : null
+    } catch (e) {
+        console.warn(`[GIS Cache] Не вдалося зчитати ${key}:`, e)
+        return null
+    }
+}
+
+// Безпечний запис (із захистом від перевищення квоти пам'яті)
+function saveToStorage(key: string, data: any): void {
+    try {
+        localStorage.setItem(key, JSON.stringify(data))
+    } catch (e) {
+        console.warn(`[GIS Cache] Помилка запису в storage для ${key}:`, e)
+    }
+}
+
 export function useGisAnalytics() {
     const isAnalyticsActive = ref(false)
     const isSimulationMode = ref(false)
     const isCalculatingNetwork = ref(false)
     const isOptimizing = ref(false)
     const optimizationProgress = ref(0)
-    const optimizationSummary = ref<OptimizationSummary | null>(null)
+    const optimizationSummary = ref<OptimizationSummary | null>(
+        loadFromStorage<OptimizationSummary>(CACHE_KEYS.OPTIMIZATION)
+    )
     const bufferRadiusKm = ref(0.5)
     const virtualToilets = ref<Toilet[]>([])
 
-    const accessibilityNetworkStats = ref<AccessibilitySummary | null>(null)
+    const accessibilityNetworkStats = ref<AccessibilitySummary | null>(
+        loadFromStorage<AccessibilitySummary>(CACHE_KEYS.ACCESSIBILITY)
+    )
 
     const setBufferRadius = (radiusKm: number) => {
         bufferRadiusKm.value = radiusKm
@@ -54,10 +88,12 @@ export function useGisAnalytics() {
         const combinedToilets = [...realToilets, ...virtualToilets.value]
 
         try {
-            accessibilityNetworkStats.value = await evaluateControlPointsAccessibilityNetwork(
+            const stats = await evaluateControlPointsAccessibilityNetwork(
                 DNIPRO_CONTROL_POINTS,
                 combinedToilets
             )
+            accessibilityNetworkStats.value = stats
+            saveToStorage(CACHE_KEYS.ACCESSIBILITY, stats)
         } finally {
             isCalculatingNetwork.value = false
         }
@@ -154,6 +190,7 @@ export function useGisAnalytics() {
             }
 
             optimizationSummary.value = summary
+            saveToStorage(CACHE_KEYS.OPTIMIZATION, summary)
             return summary
         } catch (error) {
             console.error('Optimization error:', error)
@@ -185,6 +222,13 @@ export function useGisAnalytics() {
         }
     }
 
+    const clearGisCache = () => {
+        accessibilityNetworkStats.value = null
+        optimizationSummary.value = null
+        localStorage.removeItem(CACHE_KEYS.ACCESSIBILITY)
+        localStorage.removeItem(CACHE_KEYS.OPTIMIZATION)
+    }
+
     return {
         isAnalyticsActive,
         isSimulationMode,
@@ -193,6 +237,7 @@ export function useGisAnalytics() {
         virtualToilets,
         controlPoints: DNIPRO_CONTROL_POINTS,
         accessibilityNetworkStats,
+        clearGisCache,
         setBufferRadius,
         addVirtualToilet,
         removeVirtualToilet,

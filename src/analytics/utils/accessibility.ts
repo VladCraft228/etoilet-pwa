@@ -1,4 +1,3 @@
-import * as turf from '@turf/turf'
 import type { Toilet } from '../../types'
 import type { ControlPoint } from '../data/controlPoints'
 import { getStraightDistance } from '../../components/utils/geo'
@@ -74,7 +73,33 @@ const sleep = (ms: number): Promise<void> =>
 // OSRM & CACHE
 // ==========================================================
 
-const osrmCache = new Map<string, { distanceMeters: number; durationSeconds: number } | null>()
+const OSRM_CACHE_STORAGE_KEY = 'etoilet_osrm_network_cache'
+
+// Завантажуємо раніше збережені маршрути з localStorage
+function loadInitialOsrmCache(): Map<string, { distanceMeters: number; durationSeconds: number } | null> {
+    try {
+        const raw = localStorage.getItem(OSRM_CACHE_STORAGE_KEY)
+        if (raw) {
+            const entries = JSON.parse(raw) as Array<[string, { distanceMeters: number; durationSeconds: number } | null]>
+            return new Map(entries)
+        }
+    } catch (e) {
+        console.warn('[OSRM Cache] Помилка зчитування кешу:', e)
+    }
+    return new Map()
+}
+
+const osrmCache = loadInitialOsrmCache()
+
+// Зберігаємо оновлений кеш
+function persistOsrmCache(): void {
+    try {
+        const entries = Array.from(osrmCache.entries())
+        localStorage.setItem(OSRM_CACHE_STORAGE_KEY, JSON.stringify(entries))
+    } catch (e) {
+        console.warn('[OSRM Cache] Помилка збереження кешу:', e)
+    }
+}
 
 async function fetchOsrmNetworkRouteRaw(
     startLng: number,
@@ -132,7 +157,7 @@ export async function fetchOsrmNetworkRoute(
 
     const result = await fetchOsrmNetworkRouteRaw(startLng, startLat, endLng, endLat)
     osrmCache.set(cacheKey, result)
-
+    persistOsrmCache()
     return result
 }
 
@@ -178,12 +203,15 @@ export async function evaluateControlPointsAccessibilityNetwork(
     const results: ControlPointAnalysisResult[] = []
 
     for (const controlPoint of controlPoints) {
-        const controlPointFeature = turf.point([controlPoint.longitude, controlPoint.latitude])
-
+        // Швидкий розрахунок евклідової відстані БЕЗ створення Feature-об'єктів Turf:
         const sortedCandidates = validToilets
             .map((toilet) => {
-                const toiletFeature = turf.point([toilet.longitude!, toilet.latitude!])
-                const distance = turf.distance(controlPointFeature, toiletFeature, { units: 'meters' })
+                const distance = getStraightDistance(
+                    controlPoint.latitude,
+                    controlPoint.longitude,
+                    toilet.latitude!,
+                    toilet.longitude!
+                )
 
                 return {
                     toilet,
@@ -200,6 +228,9 @@ export async function evaluateControlPointsAccessibilityNetwork(
         }> = []
 
         for (const candidate of candidates) {
+            const cacheKey = `${controlPoint.latitude.toFixed(5)},${controlPoint.longitude.toFixed(5)}->${candidate.toilet.latitude!.toFixed(5)},${candidate.toilet.longitude!.toFixed(5)}`
+            const isAlreadyCached = osrmCache.has(cacheKey)
+
             const route = await fetchOsrmNetworkRoute(
                 controlPoint.longitude,
                 controlPoint.latitude,
@@ -212,7 +243,10 @@ export async function evaluateControlPointsAccessibilityNetwork(
                 networkResults.push({ candidate, route })
             }
 
-            await sleep(REQUEST_DELAY_MS)
+            // Затримку робимо ТІЛЬКИ якщо відбувся реальний мережевий запит до OSRM!
+            if (!isAlreadyCached) {
+                await sleep(REQUEST_DELAY_MS)
+            }
         }
 
         if (networkResults.length === 0) {

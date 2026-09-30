@@ -13,7 +13,6 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 // --- СЕРВІСИ ТА COMPOSABLES ---
 import {toiletService} from './services/toiletService'
 import {useGeolocation} from './composables/useGeolocation'
-import * as turf from '@turf/turf'
 import {useRouting} from './composables/useRouting'
 import {useMap} from './composables/useMap'
 import {useAuth} from './composables/useAuth'
@@ -201,10 +200,13 @@ const straightDistanceMeters = computed(() => {
   const userLngLat = userLocationMarker.getLngLat()
   if (!userLngLat) return 0
 
-  const p1 = turf.point([userLngLat.lng, userLngLat.lat])
-  const p2 = turf.point([targetLng, targetLat])
-
-  return turf.distance(p1, p2, { units: 'meters' })
+  // Використовуємо нативну легку формулу гаверсину з geo.ts:
+  return getStraightDistance(
+      userLngLat.lat,
+      userLngLat.lng,
+      targetLat,
+      targetLng
+  )
 })
 
 // Реактивна статистика
@@ -866,33 +868,22 @@ const confirmToiletLocation = () => {
       true
 }
 
-const handleFormSubmit = async (
-    formData: any
-) => {
+// Додаємо змінну стану надсилання форми:
+const isSubmittingToilet = ref(false)
+const handleFormSubmit = async (formData: any) => {
+  isSubmittingToilet.value = true
+
   try {
-    await toiletService.addToilet(
-        formData
-    )
-
-    isAddFormOpen.value =
-        false
-
-    toast.success(
-        'Дякуємо! Вбиральню успішно надіслано на перевірку модераторам.',
-        {
-          timeout: 5000
-        }
-    )
-
+    await toiletService.addToilet(formData)
+    isAddFormOpen.value = false
+    toast.success('Дякуємо! Вбиральню успішно надіслано на перевірку модераторам.', {
+      timeout: 5000
+    })
   } catch (error: any) {
-    console.error(
-        'Помилка додавання туалету:',
-        error
-    )
-
-    toast.error(
-        'Сталася помилка під час збереження.'
-    )
+    console.error('Помилка додавання туалету:', error)
+    toast.error('Сталася помилка під час збереження.')
+  } finally {
+    isSubmittingToilet.value = false
   }
 }
 
@@ -1998,6 +1989,7 @@ onUnmounted(() => {
       <AddToiletForm
           :is-open="isAddFormOpen"
           :coords="selectedToiletCoords"
+          :is-submitting="isSubmittingToilet"
           @close="isAddFormOpen = false"
           @submit="handleFormSubmit"
       />
