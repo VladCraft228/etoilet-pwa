@@ -2,9 +2,10 @@
 import { reactive, ref, watch } from 'vue'
 import BaseModal from '../ui/BaseModal.vue'
 import BaseButton from '../ui/BaseButton.vue'
-import { type ToiletFormData, validateToiletForm } from "../utils/validators.ts"
+import { validateToiletForm } from "../utils/validators.ts"
 import imageCompression from 'browser-image-compression'
-import { useToast } from "vue-toastification";
+import { useToast } from "vue-toastification"
+import type { ToiletFormData } from "../../types.ts"
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const toast = useToast()
@@ -13,12 +14,21 @@ const triggerFileInput = () => {
   fileInput.value?.click()
 }
 
-const props = defineProps<{
-  isOpen: boolean,
+const props = withDefaults(defineProps<{
+  isOpen: boolean
   coords: [number, number] | null
+  isSubmitting?: boolean
+}>(), {
+  isSubmitting: false
+})
+
+const emit = defineEmits<{
+  (e: 'close'): void
+  (e: 'submit', data: any): void
 }>()
 
-const emit = defineEmits(['close', 'submit'])
+// Стан стиснення фотографії перед завантаженням
+const isCompressing = ref(false)
 
 const form = reactive<ToiletFormData>({
   type: 'public',
@@ -40,16 +50,15 @@ const openTime = ref('')
 const closeTime = ref('')
 const is24Hours = ref(false)
 
-// Очищення форми при закритті/відкритті або успішній відправці
+// Очищення форми при закритті або успішній відправці
 const resetForm = () => {
   if (photoPreview.value) {
-    URL.revokeObjectURL(
-        photoPreview.value
-    )
+    URL.revokeObjectURL(photoPreview.value)
   }
 
   photoPreview.value = null
   rawFile.value = null
+  isCompressing.value = false
 
   if (fileInput.value) {
     fileInput.value.value = ''
@@ -77,73 +86,46 @@ watch(() => props.isOpen, (newVal) => {
 })
 
 const handlePhotoUpload = async (event: Event) => {
-  const target =
-      event.target as HTMLInputElement
-
-  const originalFile =
-      target.files?.[0]
+  const target = event.target as HTMLInputElement
+  const originalFile = target.files?.[0]
 
   if (!originalFile) {
     return
   }
 
-  // Якщо користувач вибрав інше фото,
-  // звільняємо попередній preview.
   if (photoPreview.value) {
-    URL.revokeObjectURL(
-        photoPreview.value
-    )
-
+    URL.revokeObjectURL(photoPreview.value)
     photoPreview.value = null
   }
 
+  isCompressing.value = true
+
   try {
-    const compressedFile =
-        await imageCompression(
-            originalFile,
-            {
-              maxSizeMB: 0.3,
-              maxWidthOrHeight: 1024,
+    const compressedFile = await imageCompression(originalFile, {
+      maxSizeMB: 0.3,
+      maxWidthOrHeight: 1024,
+      useWebWorker: false
+    })
 
-              // Важливо для iOS:
-              // не створюємо додатковий Web Worker.
-              useWebWorker: false
-            }
-        )
-
-    rawFile.value =
-        compressedFile
-
-    // Preview показуємо вже стиснутого
-    // файла, а не оригінального.
-    photoPreview.value =
-        URL.createObjectURL(
-            compressedFile
-        )
-
+    rawFile.value = compressedFile
+    photoPreview.value = URL.createObjectURL(compressedFile)
   } catch (error) {
-    console.error(
-        'Помилка стиснення зображення:',
-        error
-    )
-
-    // Якщо compression не вдалося,
-    // використовуємо оригінал.
-    rawFile.value =
-        originalFile
-
-    photoPreview.value =
-        URL.createObjectURL(
-            originalFile
-        )
+    console.error('Помилка стиснення зображення:', error)
+    rawFile.value = originalFile
+    photoPreview.value = URL.createObjectURL(originalFile)
+  } finally {
+    isCompressing.value = false
   }
 }
 
 const handleClose = () => {
+  if (props.isSubmitting) return
   emit('close')
 }
 
 const submitForm = () => {
+  if (props.isSubmitting || isCompressing.value) return
+
   if (!props.coords) {
     toast.error('Не вдалося визначити точні координати точки. Спробуйте ще раз.')
     return
@@ -191,14 +173,14 @@ const submitForm = () => {
           <button
               type="button"
               @click="form.type = 'public'"
-              :class="['flex-1 py-2 rounded-lg font-medium transition-all', form.type === 'public' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500']"
+              :class="['flex-1 py-2 rounded-lg cursor-pointer font-medium transition-all', form.type === 'public' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500']"
           >
             Громадська
           </button>
           <button
               type="button"
               @click="form.type = 'bio'"
-              :class="['flex-1 py-2 rounded-lg font-medium transition-all', form.type === 'bio' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500']"
+              :class="['flex-1 py-2 rounded-lg cursor-pointer font-medium transition-all', form.type === 'bio' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500']"
           >
             Біотуалет
           </button>
@@ -272,10 +254,17 @@ const submitForm = () => {
       <div class="flex flex-col gap-2">
         <span class="text-[10px] uppercase font-bold text-slate-400 ml-1">Фото вбиральні</span>
         <div
-            @click="triggerFileInput"
+            @click="!isCompressing && !isSubmitting && triggerFileInput()"
             class="relative h-40 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center overflow-hidden cursor-pointer hover:bg-slate-100 transition-colors"
+            :class="{ 'pointer-events-none opacity-75': isCompressing || isSubmitting }"
         >
-          <img v-if="photoPreview" :src="photoPreview" class="absolute inset-0 w-full h-full object-cover" />
+          <!-- Спінер стиснення фото -->
+          <div v-if="isCompressing" class="flex flex-col items-center gap-2 text-indigo-600">
+            <div class="w-7 h-7 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+            <span class="text-xs font-semibold">Оптимізація фото...</span>
+          </div>
+
+          <img v-else-if="photoPreview" :src="photoPreview" class="absolute inset-0 w-full h-full object-cover" />
           <div v-else class="flex flex-col items-center gap-2 text-slate-400">
             <span class="material-symbols-outlined text-[32px]">add_a_photo</span>
             <span class="text-xs font-medium">Натисніть, щоб додати фото</span>
@@ -299,11 +288,26 @@ const submitForm = () => {
 
     <!-- Кнопки в один рядок -->
     <div class="p-4 border-t border-slate-100 bg-slate-50 flex gap-2">
-      <BaseButton variant="ghost" class="flex-1" @click="handleClose">
+      <BaseButton
+          variant="ghost"
+          class="flex-1"
+          :disabled="isSubmitting || isCompressing"
+          @click="handleClose"
+      >
         Скасувати
       </BaseButton>
-      <BaseButton variant="primary" class="flex-1" @click="submitForm">
-        Надіслати
+
+      <BaseButton
+          variant="primary"
+          class="flex-1 flex items-center justify-center gap-2"
+          :disabled="isSubmitting || isCompressing"
+          @click="submitForm"
+      >
+        <div
+            v-if="isSubmitting"
+            class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"
+        ></div>
+        <span>{{ isSubmitting ? 'Надсилання...' : 'Надіслати' }}</span>
       </BaseButton>
     </div>
 

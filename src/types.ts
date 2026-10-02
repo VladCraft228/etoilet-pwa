@@ -26,6 +26,18 @@ export interface Toilet {
     toilet_images?: ToiletImage[]
 }
 
+export interface ToiletFormData {
+    type: 'public' | 'bio'
+    has_washbasin: boolean
+    has_wheelchair_accessible: boolean
+    price: number
+    work_hours: string
+    stalls_count: number
+    urinals_count: number
+    is_lock_broken: boolean
+    comment: string
+}
+
 export type ReportReason =
     | 'does_not_exist'
     | 'accessibility_issue'

@@ -1,0 +1,446 @@
+<script setup lang="ts">
+import { ref, computed } from 'vue'
+import type { Toilet } from '../../types'
+import type { AccessibilitySummary } from '../utils/accessibility'
+import type { OptimizationSummary, OptimizationCandidate } from '../types/optimizationType'
+import { calculateCategoryAccessibilityStats } from '../utils/categoryStats'
+
+const props = defineProps<{
+  bufferRadiusKm: number
+  toilets: Toilet[]
+  stats: {
+    totalToilets: number
+    avgNearestNeighborDistanceMeters: number
+    minNearestDistanceMeters: number
+    maxNearestDistanceMeters: number
+  }
+  accessibilityStats?: AccessibilitySummary | null
+  optimizationSummary?: OptimizationSummary | null
+  selectedCandidateIndex?: number | null
+  isLoadingNetwork?: boolean
+  networkProgress?: number
+  isOptimizing?: boolean
+  optimizationProgress?: number
+  isSimulationMode?: boolean
+  virtualToilets?: Toilet[]
+}>()
+
+const isCollapsed = ref(false)
+
+const categoryStats = computed(() => {
+  if (!props.accessibilityStats) return []
+  return calculateCategoryAccessibilityStats(props.accessibilityStats.results)
+})
+
+// Витягуємо TOP-5 кандидатів з optimizationSummary
+const topCandidates = computed<OptimizationCandidate[]>(() => {
+  if (!props.optimizationSummary?.topCandidates) return []
+  return props.optimizationSummary.topCandidates.slice(0, 5)
+})
+
+const emit = defineEmits<{
+  (e: 'change-radius', radiusKm: number): void
+  (e: 'export-csv'): void
+  (e: 'export-accessibility-csv'): void
+  (e: 'close'): void
+  (e: 'toggle-simulation'): void
+  (e: 'remove-virtual', id: string): void
+  (e: 'clear-virtual'): void
+  (e: 'calculate-network'): void
+  (e: 'run-optimization'): void
+  (e: 'select-candidate', candidate: OptimizationCandidate, index: number): void
+  (e: 'show-candidate', lat: number, lng: number): void
+}>()
+
+const radiusOptions = [
+  { label: '300 м', km: 0.3, time: '~4 хв' },
+  { label: '500 м', km: 0.5, time: '~6 хв' },
+  { label: '800 м', km: 0.8, time: '~10 хв' },
+]
+</script>
+
+<template>
+  <div
+      class="absolute top-4 right-3 z-60 w-[calc(100vw-5rem)] max-w-77.5 sm:max-w-xs sm:w-80 max-h-[55dvh] sm:max-h-[calc(100dvh-2rem)] flex flex-col bg-white/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/80 transition-all duration-300 pointer-events-auto overflow-hidden"
+      :class="{ 'shadow-md': isCollapsed }"
+  >
+    <!-- ЗАФІКСОВАНА ШАПКА ВИСОТОЮ H-12 (48px) -->
+    <div
+        class="h-12 flex items-center justify-between px-3.5 bg-white/90 backdrop-blur-md shrink-0 select-none cursor-pointer"
+        :class="{ 'border-b border-slate-100/80': !isCollapsed }"
+        @click="isCollapsed ? (isCollapsed = false) : null"
+    >
+      <div class="flex items-center gap-2">
+        <span class="material-symbols-outlined text-indigo-600 text-[22px]">analytics</span>
+        <h3 class="font-bold text-slate-800 text-xs sm:text-sm tracking-tight">ГІС Аналітика</h3>
+        <span
+            v-if="isCollapsed"
+            class="text-[11px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full"
+        >
+          {{ bufferRadiusKm * 1000 }}м
+        </span>
+      </div>
+
+      <!-- Кнопки дій: Згорнути та Закрити -->
+      <div class="flex items-center gap-1">
+        <button
+            type="button"
+            @click.stop="isCollapsed = !isCollapsed"
+            class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-slate-100 active:scale-95 transition-all cursor-pointer"
+            :title="isCollapsed ? 'Розгорнути панель' : 'Згорнути панель'"
+        >
+          <span class="material-symbols-outlined text-[20px]">
+            {{ isCollapsed ? 'expand_more' : 'expand_less' }}
+          </span>
+        </button>
+
+        <button
+            type="button"
+            @click.stop="emit('close')"
+            class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 active:scale-95 transition-colors cursor-pointer"
+            title="Вимкнути аналітику"
+        >
+          <span class="material-symbols-outlined text-[18px]">close</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ТІЛО ПАНЕЛІ (ОКРЕМИЙ СКРОЛ) -->
+    <div
+        v-show="!isCollapsed"
+        class="overflow-y-auto p-2.5 sm:p-3 space-y-2 flex-1 overscroll-contain touch-pan-y scrollbar-thin"
+    >
+      <!-- ВИБІР БУФЕРА -->
+      <div>
+        <label class="block text-[9px] font-bold text-slate-400 mb-1 uppercase tracking-wider">
+          Радіус пішого покриття
+        </label>
+        <div class="grid grid-cols-3 gap-1">
+          <button
+              v-for="opt in radiusOptions"
+              :key="opt.km"
+              type="button"
+              @click="emit('change-radius', opt.km)"
+              :class="[
+              'py-1 px-0.5 rounded-lg text-center transition-all cursor-pointer border flex flex-col items-center justify-center',
+              bufferRadiusKm === opt.km
+                ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm shadow-indigo-600/20'
+                : 'bg-white/80 text-slate-700 border-slate-200 hover:bg-slate-50'
+            ]"
+          >
+            <span class="font-bold text-[11px] leading-tight">{{ opt.label }}</span>
+            <span :class="['text-[8px]', bufferRadiusKm === opt.km ? 'text-indigo-100' : 'text-slate-400']">
+              {{ opt.time }}
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <!-- БЛОК СИМУЛЯЦІЇ -->
+      <div class="pt-1.5 border-t border-slate-100 space-y-1.5">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-bold text-slate-700 flex items-center gap-1">
+            <span class="material-symbols-outlined text-amber-500 text-[16px]">add_location</span>
+            Симуляція точки
+          </span>
+          <button
+              type="button"
+              @click="emit('toggle-simulation')"
+              :class="[
+              'px-2 py-0.5 rounded-md text-[10px] font-semibold transition-all cursor-pointer',
+              isSimulationMode
+                ? 'bg-amber-500 text-white shadow-sm shadow-amber-500/30 animate-pulse'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            ]"
+          >
+            {{ isSimulationMode ? 'Клікніть мапу' : 'Увімкнути' }}
+          </button>
+        </div>
+
+        <div v-if="virtualToilets && virtualToilets.length > 0" class="space-y-1 max-h-24 overflow-y-auto pr-1">
+          <div
+              v-for="(vt, idx) in virtualToilets"
+              :key="vt.id"
+              class="flex items-center justify-between p-1 bg-amber-50/80 rounded border border-amber-200/60 text-[11px] text-amber-900"
+          >
+            <span>Тестова точка #{{ idx + 1 }}</span>
+            <button
+                type="button"
+                @click="emit('remove-virtual', vt.id)"
+                class="text-amber-700 hover:text-red-600 p-0.5 cursor-pointer"
+            >
+              <span class="material-symbols-outlined text-[14px] block">close</span>
+            </button>
+          </div>
+
+          <button
+              type="button"
+              @click="emit('clear-virtual')"
+              class="w-full text-center text-[10px] text-slate-400 hover:text-slate-600 py-0.5 cursor-pointer"
+          >
+            Очистити всі
+          </button>
+        </div>
+      </div>
+
+      <!-- БЛОК ОПТИМІЗАЦІЇ РАЗМІЩЕННЯ -->
+      <div class="bg-amber-50/60 p-2 rounded-xl border border-amber-200/80 text-[11px] space-y-1.5">
+        <div class="flex items-center justify-between font-bold text-amber-950">
+          <span class="flex items-center gap-1">
+            <span class="material-symbols-outlined text-[16px] text-amber-600">auto_awesome</span>
+            Оптимізація (ТОП-5)
+          </span>
+          <span v-if="isOptimizing" class="text-[11px] font-semibold text-amber-600">
+            {{ optimizationProgress ?? 0 }}%
+          </span>
+        </div>
+
+        <div v-if="isOptimizing" class="space-y-1">
+          <div class="w-full bg-amber-200/60 rounded-full h-1.5 overflow-hidden">
+            <div
+                class="bg-amber-500 h-1.5 rounded-full transition-all duration-200"
+                :style="{ width: `${optimizationProgress ?? 0}%` }"
+            ></div>
+          </div>
+          <div class="text-[9px] text-amber-700 text-center animate-pulse">
+            Аналіз кандидатів...
+          </div>
+        </div>
+
+        <button
+            v-else
+            type="button"
+            @click="emit('run-optimization')"
+            class="w-full py-1 px-2.5 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white font-semibold rounded-lg text-[11px] transition-all shadow-sm flex items-center justify-center gap-1 cursor-pointer"
+        >
+          <span class="material-symbols-outlined text-[15px]">tune</span>
+          <span>Знайти найкраще місце</span>
+        </button>
+
+        <!-- Таблиця TOP-5 -->
+        <template v-if="optimizationSummary && topCandidates.length > 0 && !isOptimizing">
+          <div class="pt-1.5 border-t border-amber-200/60 space-y-1.5">
+            <div class="overflow-x-auto rounded-lg border border-amber-200/80 bg-white shadow-sm">
+              <table class="w-full text-[9px] text-left">
+                <thead class="bg-amber-100/50 text-amber-900 border-b border-amber-200/60 font-semibold">
+                <tr>
+                  <th class="p-1 text-center">№</th>
+                  <th class="p-1 text-center">Δ5</th>
+                  <th class="p-1 text-center">Δ10</th>
+                  <th class="p-1 text-right">Відст.</th>
+                </tr>
+                </thead>
+                <tbody class="divide-y divide-amber-100">
+                <tr
+                    v-for="(cand, idx) in topCandidates"
+                    :key="idx"
+                    @click="emit('select-candidate', cand, idx); emit('show-candidate', cand.latitude, cand.longitude)"
+                    :class="[
+                      'cursor-pointer transition-colors hover:bg-amber-100/40',
+                      selectedCandidateIndex === idx ? 'bg-amber-100/80 font-bold' : ''
+                    ]"
+                >
+                  <td class="p-1 text-center">
+                      <span
+                          :class="[
+                          'inline-flex items-center justify-center w-3.5 h-3.5 rounded-full text-[8px]',
+                          idx === 0 ? 'bg-emerald-500 text-white font-bold' : 'bg-slate-200 text-slate-700'
+                        ]"
+                      >
+                        {{ idx === 0 ? '★' : idx + 1 }}
+                      </span>
+                  </td>
+                  <td class="p-1 text-center" :class="cand.deltaCoverage5 > 0 ? 'text-emerald-600 font-semibold' : 'text-slate-500'">
+                    +{{ cand.deltaCoverage5 }}%
+                  </td>
+                  <td class="p-1 text-center" :class="cand.deltaCoverage10 > 0 ? 'text-emerald-600 font-semibold' : 'text-slate-500'">
+                    +{{ cand.deltaCoverage10 }}%
+                  </td>
+                  <td class="p-1 text-right text-slate-600">
+                    {{ Math.round(cand.avgWalkingDistance) }}м
+                  </td>
+                </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- БЛОК МЕРЕЖЕВОЇ ДОСТУПНОСТІ (OSRM) -->
+      <div class="bg-indigo-50/90 p-2 rounded-xl border border-indigo-100 text-[11px] space-y-1.5">
+        <div class="flex items-center justify-between font-bold text-indigo-950">
+          <span class="flex items-center gap-1">
+            <span class="material-symbols-outlined text-[16px] text-indigo-600">directions_walk</span>
+            Доступність (OSRM)
+          </span>
+
+          <span v-if="isLoadingNetwork" class="text-[11px] font-bold text-indigo-600">
+            {{ networkProgress ?? 0 }}%
+          </span>
+          <span v-else-if="accessibilityStats" class="text-xs text-indigo-600 font-extrabold">
+            {{ accessibilityStats.accessible5MinPercent }}%
+          </span>
+        </div>
+
+        <div v-if="isLoadingNetwork" class="space-y-1">
+          <div class="w-full bg-indigo-200/60 rounded-full h-1.5 overflow-hidden">
+            <div
+                class="bg-indigo-600 h-1.5 rounded-full transition-all duration-200"
+                :style="{ width: `${networkProgress ?? 0}%` }"
+            ></div>
+          </div>
+          <div class="text-[9px] text-indigo-700 text-center animate-pulse">
+            Розрахунок пішохідних шляхів...
+          </div>
+        </div>
+
+        <div v-if="!accessibilityStats && !isLoadingNetwork">
+          <button
+              type="button"
+              @click="emit('calculate-network')"
+              class="w-full py-1 px-2.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-semibold rounded-lg text-[11px] transition-all shadow-sm flex items-center justify-center gap-1 cursor-pointer"
+          >
+            <span class="material-symbols-outlined text-[15px]">play_arrow</span>
+            <span>Розрахувати</span>
+          </button>
+        </div>
+
+        <template v-else-if="accessibilityStats && !isLoadingNetwork">
+          <div class="w-full bg-indigo-200/60 rounded-full h-1.5 overflow-hidden">
+            <div
+                class="bg-indigo-600 h-1.5 rounded-full transition-all duration-500"
+                :style="{ width: `${accessibilityStats.accessible5MinPercent}%` }"
+            ></div>
+          </div>
+
+          <div class="flex justify-between text-[10px] text-indigo-800">
+            <span>Покрито: <b>{{ accessibilityStats.accessible5MinCount }}</b> з {{ accessibilityStats.totalControlPoints }}</span>
+            <span class="font-semibold">(≤ 5 хв)</span>
+          </div>
+
+          <div class="pt-1 border-t border-indigo-100/80 grid grid-cols-2 gap-1 text-[9px] text-indigo-900">
+            <div>Сер. час: <b>{{ accessibilityStats.avgWalkingTimeMins }} хв</b></div>
+            <div>Сер. K: <b>{{ accessibilityStats.avgCircuityFactor }}</b></div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-1 pt-0.5">
+            <button
+                type="button"
+                @click="emit('calculate-network')"
+                class="py-0.5 px-1.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-medium rounded text-[9px] transition-colors flex items-center justify-center gap-0.5 cursor-pointer"
+            >
+              <span class="material-symbols-outlined text-[12px]">refresh</span>
+              <span>Оновити</span>
+            </button>
+
+            <button
+                type="button"
+                @click="emit('export-accessibility-csv')"
+                class="py-0.5 px-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded text-[9px] transition-colors flex items-center justify-center gap-0.5 cursor-pointer shadow-sm"
+                title="Завантажити датасет контрольних точок"
+            >
+              <span class="material-symbols-outlined text-[12px]">table_view</span>
+              <span>CSV</span>
+            </button>
+          </div>
+        </template>
+      </div>
+
+      <!-- СТАТИСТИКА ЗА КАТЕГОРІЯМИ -->
+      <div
+          v-if="categoryStats.length > 0"
+          class="bg-white p-2 rounded-xl border border-slate-200 space-y-1.5"
+      >
+        <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider">
+          Доступність за категоріями
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-[9px]">
+            <thead>
+            <tr class="text-slate-400 border-b border-slate-100">
+              <th class="text-left py-1 font-semibold">Кат.</th>
+              <th class="text-center py-1 font-semibold">N</th>
+              <th class="text-center py-1 font-semibold">5 хв</th>
+              <th class="text-center py-1 font-semibold">10 хв</th>
+              <th class="text-right py-1 font-semibold">м</th>
+              <th class="text-right py-1 font-semibold">K</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr
+                v-for="stat in categoryStats"
+                :key="stat.category"
+                class="border-b border-slate-50 last:border-0"
+            >
+              <td class="py-1 text-slate-700 font-medium">{{ stat.category }}</td>
+              <td class="py-1 text-center text-slate-500">{{ stat.count }}</td>
+              <td class="py-1 text-center font-semibold text-indigo-600">{{ Math.round(stat.coverage5) }}%</td>
+              <td class="py-1 text-center font-semibold text-indigo-600">{{ Math.round(stat.coverage10) }}%</td>
+              <td class="py-1 text-right text-slate-600">{{ Math.round(stat.avgWalking) }}</td>
+              <td class="py-1 text-right text-slate-600">{{ stat.avgCircuity.toFixed(2) }}</td>
+            </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ПРОСТОРОВІ МЕТРИКИ -->
+      <div class="bg-slate-50/80 p-2 rounded-xl border border-slate-100 space-y-1 text-[11px]">
+        <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider">
+          Просторові метрики
+        </div>
+
+        <div class="flex items-center justify-between text-slate-600">
+          <span>Активних об'єктів:</span>
+          <span class="font-bold text-slate-800">{{ stats.totalToilets }}</span>
+        </div>
+
+        <div class="flex items-center justify-between text-slate-600">
+          <span>Сер. відст. між сусідами:</span>
+          <span class="font-bold text-indigo-600">{{ stats.avgNearestNeighborDistanceMeters }} м</span>
+        </div>
+
+        <div class="flex items-center justify-between text-slate-400 text-[10px]">
+          <span>Мін / Макс:</span>
+          <span class="font-medium text-slate-600">{{ stats.minNearestDistanceMeters }}м / {{ stats.maxNearestDistanceMeters }}м</span>
+        </div>
+      </div>
+
+      <!-- КНОПКА ЗАВАНТАЖЕННЯ CSV -->
+      <button
+          type="button"
+          @click="emit('export-csv')"
+          class="w-full py-1.5 px-2 bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 text-indigo-700 font-semibold rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5 cursor-pointer border border-indigo-100"
+      >
+        <span class="material-symbols-outlined text-[15px]">download</span>
+        <span>Завантажити CSV-звіт</span>
+      </button>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99, 102, 241, 0.3) transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 4px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgba(99, 102, 241, 0.25);
+  border-radius: 9999px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(99, 102, 241, 0.5);
+}
+</style>

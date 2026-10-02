@@ -5,20 +5,19 @@ import {
   onMounted,
   onUnmounted,
   defineAsyncComponent,
-  nextTick
-} from 'vue'
+  nextTick, computed} from 'vue'
 
-import maplibregl from 'maplibre-gl'
+import maplibregl, {MapMouseEvent} from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 // --- СЕРВІСИ ТА COMPOSABLES ---
-import { toiletService } from './services/toiletService'
-import { useGeolocation } from './composables/useGeolocation'
-import { useRouting } from './composables/useRouting'
-import { useMap } from './composables/useMap'
-import { useAuth } from './composables/useAuth'
-import { useRealtimeToilets } from './composables/useRealtimeToilets'
-import { useToast } from 'vue-toastification'
+import {toiletService} from './services/toiletService'
+import {useGeolocation} from './composables/useGeolocation'
+import {useRouting} from './composables/useRouting'
+import {useMap} from './composables/useMap'
+import {useAuth} from './composables/useAuth'
+import {useRealtimeToilets} from './composables/useRealtimeToilets'
+import {useToast} from 'vue-toastification'
 
 // --- БАЗОВІ КОМПОНЕНТИ ---
 import AppNavigation from './components/ui/AppNavigation.vue'
@@ -33,8 +32,11 @@ import LoginView from './components/views/LoginView.vue'
 import EditToiletModal from './components/features/EditToiletModal.vue'
 import RelocateOverlay from './components/map/RelocateOverlay.vue'
 
-import type { Toilet } from './types.ts'
+import type {Toilet} from './types.ts'
+import {useGisAnalytics} from "./analytics/composables/useGisAnalytics.ts";
 import ReportToiletModal from "./components/features/ReportToiletModal.vue";
+import {getStraightDistance} from "./components/utils/geo.ts";
+import type {OptimizationCandidate} from "./analytics/types/optimizationType.ts";
 
 // --- ЛІНИВІ КОМПОНЕНТИ ---
 const LocationPrompt = defineAsyncComponent(
@@ -55,6 +57,13 @@ const WelcomeModal = defineAsyncComponent(
 
 const RouteChoiceModal = defineAsyncComponent(
     () => import('./components/features/RouteChoiceModal.vue')
+)
+
+const AnalyticsPanel = defineAsyncComponent(
+    () => import('./analytics/components/AnalyticsPanel.vue')
+)
+const OptimizationLayer = defineAsyncComponent(
+    () => import('./analytics/components/OptimizationLayer.vue')
 )
 
 // ==========================================================
@@ -101,17 +110,166 @@ const {
 
 const {
   map,
+  temporaryClickedCoords,
   initMap,
   flyToCoords,
   fitRouteBounds,
   updateToiletsClustered,
   setSelectedToiletId,
-
   syncTemporaryCoordsWithCenter,
-  clearTemporaryCoords
+  clearTemporaryCoords,
+  renderAnalyticsBuffers,
+  clearAnalyticsBuffers,
+  renderVirtualMarkers,
+  clearVirtualMarkers,
+  renderControlPointsLayer,
+  clearControlPointsLayer
 } = useMap()
 
+const {
+  isAnalyticsActive,
+  isSimulationMode,
+  isCalculatingNetwork,
+  bufferRadiusKm,
+  virtualToilets,
+  controlPoints,
+  accessibilityNetworkStats,
+  setBufferRadius,
+  addVirtualToilet,
+  removeVirtualToilet,
+  clearVirtualToilets,
+  recalculateNetworkAccessibility,
+  runAccessibilityBenchmark,
+  isOptimizing,
+  runOptimizationTest,
+  optimizationProgress,
+  optimizationSummary,
+  getBuffersGeoJSON,
+  getSummaryStats,
+  downloadCsvReport,
+  downloadAccessibilityCsvReport
+} = useGisAnalytics()
+
 const toast = useToast()
+
+// ==========================================================
+// GIS ANALYTICS
+// ==========================================================
+
+const handleToggleAnalytics = () => {
+  isAnalyticsActive.value = !isAnalyticsActive.value
+
+  if (isAnalyticsActive.value) {
+    const geojson = getBuffersGeoJSON(approvedToilets.value)
+    renderAnalyticsBuffers(geojson)
+    renderControlPointsLayer(controlPoints)
+  } else {
+    clearAnalyticsBuffers()
+    clearVirtualMarkers()
+    clearControlPointsLayer()
+  }
+}
+
+// Перемальовуємо буфери при зміні основних точок
+watch(approvedToilets, (newToilets) => {
+  if (isAnalyticsActive.value) {
+    const geojson = getBuffersGeoJSON(newToilets)
+    renderAnalyticsBuffers(geojson)
+  }
+}, { deep: true })
+
+// Зміна радіуса
+const handleChangeRadius = (newRadiusKm: number) => {
+  setBufferRadius(newRadiusKm)
+  if (isAnalyticsActive.value) {
+    const geojson = getBuffersGeoJSON(approvedToilets.value)
+    renderAnalyticsBuffers(geojson)
+  }
+}
+
+// Пряма відстань між точкою юзера та фінішним туалетом
+const straightDistanceMeters = computed(() => {
+  if (!targetToiletForRoute.value) return 0
+
+  const targetLng = targetToiletForRoute.value.longitude
+  const targetLat = targetToiletForRoute.value.latitude
+
+  if (targetLng == null || targetLat == null) return 0
+  if (!userLocationMarker) return 0
+
+  const userLngLat = userLocationMarker.getLngLat()
+  if (!userLngLat) return 0
+
+  // Використовуємо нативну легку формулу гаверсину з geo.ts:
+  return getStraightDistance(
+      userLngLat.lat,
+      userLngLat.lng,
+      targetLat,
+      targetLng
+  )
+})
+
+// Реактивна статистика
+const gisStats = computed(() => getSummaryStats(approvedToilets.value))
+
+// Хендлер експорту CSV
+const handleExportCsv = () => {
+  downloadCsvReport(approvedToilets.value)
+}
+
+// Хендлер кліку по мапі
+const handleMapClickForAnalytics = (e: maplibregl.MapMouseEvent) => {
+  if (isAnalyticsActive.value && isSimulationMode.value) {
+    const { lng, lat } = e.lngLat
+    addVirtualToilet(lng, lat)
+  }
+}
+
+// Об'єднаний watch для оновлення віртуальних точок, контрольних точок та буферів
+watch(
+    [virtualToilets, bufferRadiusKm, isAnalyticsActive],
+    () => {
+      if (isAnalyticsActive.value) {
+        const geojson = getBuffersGeoJSON(approvedToilets.value)
+        renderAnalyticsBuffers(geojson)
+        renderVirtualMarkers(virtualToilets.value)
+        renderControlPointsLayer(controlPoints)
+      } else {
+        clearVirtualMarkers()
+        clearControlPointsLayer()
+      }
+    },
+    { deep: true }
+)
+
+// ==========================================================
+// GIS BENCHMARK (DEV ONLY)
+// ==========================================================
+
+const runBenchmark = async () => {
+  const results = await runAccessibilityBenchmark(approvedToilets.value)
+
+  console.table(
+      results.map(result => ({
+        MAX_CANDIDATES: result.maxCandidates,
+        '5 min (%)': result.summary.accessible5MinPercent,
+        '10 min (%)': result.summary.accessible10MinPercent,
+        'Avg walk (m)': result.summary.avgWalkingDistanceMeters,
+        'Median walk (m)': result.summary.medianWalkingDistanceMeters,
+        'Avg time (min)': result.summary.avgWalkingTimeMins,
+        'Median time (min)': result.summary.medianWalkingTimeMins,
+        'Avg K': result.summary.avgCircuityFactor,
+        'Median K': result.summary.medianCircuityFactor,
+        analyzed: result.summary.analyzedControlPoints,
+        failed: result.summary.failedControlPoints
+      }))
+  )
+}
+
+if (import.meta.env.DEV) {
+  ;(window as any).runBenchmark = runBenchmark
+}
+
 
 // ==========================================================
 // UI / MODALS
@@ -147,6 +305,9 @@ const reportingToilet =
 // ==========================================================
 // MAP STATE
 // ==========================================================
+const isGpsTrackingActive =
+    ref(false)
+
 const isGpsTrackingActive =
     ref(false)
 
@@ -237,40 +398,43 @@ let activeMapPopup:
 // HELPERS
 // ==========================================================
 
-function getDistanceMeters(
-    a: [number, number],
-    b: [number, number]
-) {
-  const R = 6371e3
 
-  const lat1 =
-      a[0] * Math.PI / 180
 
-  const lat2 =
-      b[0] * Math.PI / 180
+const getRemainingRouteDistance = (
+    currentLocation: [number, number],
+    routeCoords: [number, number][]
+): number => {
+  if (routeCoords.length < 2) {
+    return Infinity
+  }
 
-  const deltaLat =
-      (b[0] - a[0]) *
-      Math.PI / 180
+  // Знаходимо найближчу точку поточного маршруту
+  let closestIndex = 0
+  let closestDistance = Infinity
 
-  const deltaLng =
-      (b[1] - a[1]) *
-      Math.PI / 180
+  for (let i = 0; i < routeCoords.length; i++) {
+    const distance = getStraightDistance(
+        currentLocation[0], currentLocation[1],
+        routeCoords[i][0], routeCoords[i][1]
+    )
 
-  const value =
-      Math.sin(deltaLat / 2) ** 2 +
-      Math.cos(lat1) *
-      Math.cos(lat2) *
-      Math.sin(deltaLng / 2) ** 2
+    if (distance < closestDistance) {
+      closestDistance = distance
+      closestIndex = i
+    }
+  }
 
-  return (
-      2 *
-      R *
-      Math.atan2(
-          Math.sqrt(value),
-          Math.sqrt(1 - value)
-      )
-  )
+  // Від найближчої точки маршруту до його кінця
+  let remainingDistance = closestDistance
+
+  for (let i = closestIndex; i < routeCoords.length - 1; i++) {
+    remainingDistance += getStraightDistance(
+        routeCoords[i][0], routeCoords[i][1],
+        routeCoords[i + 1][0], routeCoords[i + 1][1]
+    )
+  }
+
+  return remainingDistance
 }
 
 const getRemainingRouteDistance = (
@@ -557,14 +721,17 @@ const handlePopupRoute = () => {
 const handleGpsLocation = () => {
   showLocationPrompt.value = false
 
-  // Якщо користувач був у manual mode, скасовуємо його
   if (isManualSelectionMode.value) {
     isManualSelectionMode.value = false
     clearTemporaryCoords()
   }
 
-  // СЦЕНАРІЙ 1: GPS працює, але юзер зрушив карту (камера відв'язана).
-  // Повертаємо камеру до юзера, НЕ зупиняючи фоновий GPS!
+  // Якщо локація була встановлена вручну раніше — просто центруємося на ній
+  if (!isGpsTrackingActive.value && userLocation.value) {
+    flyToCoords(userLocation.value[1], userLocation.value[0], 16)
+  }
+
+  // Якщо GPS вже працює, але карта була зрушена — повертаємо камеру
   if (isGpsTrackingActive.value && !isFollowUserActive.value) {
     isFollowUserActive.value = true
     if (userLocationMarker) {
@@ -574,8 +741,7 @@ const handleGpsLocation = () => {
     return
   }
 
-  // СЦЕНАРІЙ 2: Повторний клік, коли і GPS працює, і камера вже відцентрована.
-  // Повністю вимикаємо GPS.
+  // Повторний клік при активному спостереженні вимикає трекінг
   if (isGpsTrackingActive.value && isFollowUserActive.value) {
     stopTrackingLocation()
     isGpsTrackingActive.value = false
@@ -583,22 +749,28 @@ const handleGpsLocation = () => {
     return
   }
 
-  // СЦЕНАРІЙ 3: Запуск GPS з нуля
   isGpsTrackingActive.value = true
   isFollowUserActive.value = true
 
   startTrackingLocation(
       (lat, lng) => {
-        // Маркер та відстані у тобі оновлюються автоматично всередині startTrackingLocation,
-        // а камеру рухаємо ТІЛЬКИ якщо увімкнено слідування:
         if (isFollowUserActive.value) {
           flyToCoords(lng, lat, 16)
         }
+
+        // Якщо пошук викликала кнопка near_me — одразу летимо до вбиральні
+        if (pendingFindNearest.value) {
+          findAndSelectNearest(lat, lng)
+          pendingFindNearest.value = false
+        }
       },
       () => {
-        // Callback помилки GPS
+        // ПОМИЛКА GPS: відхилено, недоступно або заблоковано в системі
         isGpsTrackingActive.value = false
         isFollowUserActive.value = false
+
+        // Замість глухого кута відкриваємо вікно вибору локації:
+        showLocationPrompt.value = true
       }
   )
 }
@@ -625,14 +797,62 @@ const handleManualLocation = () => {
 const confirmManualLocation = () => {
   if (!map.value) return
 
-  // Єдине джерело істини — поточний центр карти під прицілом
   const mapCenter = map.value.getCenter()
+  const lat = mapCenter.lat
+  const lng = mapCenter.lng
 
-  // Записуємо у форматі застосунку [lat, lng]
-  userLocation.value = [mapCenter.lat, mapCenter.lng]
-
-  // Вимикаємо режим
+  userLocation.value = [lat, lng]
   isManualSelectionMode.value = false
+
+  // Якщо користувач прийшов сюди через кнопку near_me — одразу ведемо до точки!
+  if (pendingFindNearest.value) {
+    findAndSelectNearest(lat, lng)
+    pendingFindNearest.value = false
+  }
+}
+
+// ==========================================================
+// QUICK TOILET SEARCH
+// ==========================================================
+const pendingFindNearest = ref(false)
+
+const findAndSelectNearest = (lat: number, lng: number) => {
+  const availableToilets = approvedToilets.value.filter(
+      (t) => typeof t.latitude === 'number' && typeof t.longitude === 'number'
+  )
+
+  if (!availableToilets.length) {
+    toast.warning('Наразі немає підтверджених вбиралень на мапі')
+    return
+  }
+
+  let nearestToilet: Toilet | null = null
+  let minDistance = Infinity
+
+  for (const toilet of availableToilets) {
+    const dist = getStraightDistance(lat, lng, toilet.latitude!, toilet.longitude!)
+    if (dist < minDistance) {
+      minDistance = dist
+      nearestToilet = toilet
+    }
+  }
+
+  if (nearestToilet) {
+    selectToiletById(nearestToilet.id)
+    toast.success(`Найближча вбиральня (~${Math.round(minDistance)} м)`)
+  }
+}
+
+const handleFindNearestToilet = () => {
+  // Якщо локація вже є — одразу летимо до туалету
+  if (userLocation.value) {
+    findAndSelectNearest(userLocation.value[0], userLocation.value[1])
+    return
+  }
+
+  // Якщо локації ще немає — фіксуємо намір і запускаємо пошук/запит позиції
+  pendingFindNearest.value = true
+  handleGpsLocation()
 }
 
 // ==========================================================
@@ -697,33 +917,22 @@ const confirmToiletLocation = () => {
       true
 }
 
-const handleFormSubmit = async (
-    formData: any
-) => {
+// Додаємо змінну стану надсилання форми:
+const isSubmittingToilet = ref(false)
+const handleFormSubmit = async (formData: any) => {
+  isSubmittingToilet.value = true
+
   try {
-    await toiletService.addToilet(
-        formData
-    )
-
-    isAddFormOpen.value =
-        false
-
-    toast.success(
-        'Дякуємо! Вбиральню успішно надіслано на перевірку модераторам.',
-        {
-          timeout: 5000
-        }
-    )
-
+    await toiletService.addToilet(formData)
+    isAddFormOpen.value = false
+    toast.success('Дякуємо! Вбиральню успішно надіслано на перевірку модераторам.', {
+      timeout: 5000
+    })
   } catch (error: any) {
-    console.error(
-        'Помилка додавання туалету:',
-        error
-    )
-
-    toast.error(
-        'Сталася помилка під час збереження.'
-    )
+    console.error('Помилка додавання туалету:', error)
+    toast.error('Сталася помилка під час збереження.')
+  } finally {
+    isSubmittingToilet.value = false
   }
 }
 
@@ -734,6 +943,7 @@ const handleFormSubmit = async (
 const cancelManualLocation = () => {
   clearTemporaryCoords()
   isManualSelectionMode.value = false
+  pendingFindNearest.value = false
 }
 
 const cancelToiletLocation = () => {
@@ -771,37 +981,22 @@ const handleAddressSelected = (
       lng: number
     }
 ) => {
-  isAddressSearchOpen.value =
-      false
+  isAddressSearchOpen.value = false
 
-  /**
-   * Якщо користувач був у manual mode,
-   * пошук адреси завершує цей режим.
-   */
-  if (
-      addressSearchContext.value ===
-      'user'
-  ) {
-    isManualSelectionMode.value =
-        false
-
+  if (addressSearchContext.value === 'user') {
+    isManualSelectionMode.value = false
     clearTemporaryCoords()
-  }
 
-  flyToCoords(
-      result.lng,
-      result.lat,
-      17
-  )
+    flyToCoords(result.lng, result.lat, 17)
+    userLocation.value = [result.lat, result.lng]
 
-  if (
-      addressSearchContext.value ===
-      'user'
-  ) {
-    userLocation.value = [
-      result.lat,
-      result.lng
-    ]
+    // Якщо адреса вводилась у рамках швидкого пошуку найближчої:
+    if (pendingFindNearest.value) {
+      findAndSelectNearest(result.lat, result.lng)
+      pendingFindNearest.value = false
+    }
+  } else {
+    flyToCoords(result.lng, result.lat, 17)
   }
 }
 
@@ -928,16 +1123,12 @@ const requestRoute = async (
     if (
         pending &&
         lastRoutedLocation.value &&
-        getDistanceMeters(
-            pending,
-            lastRoutedLocation.value
-        ) >=
-        ROUTE_REBUILD_DISTANCE
+        getStraightDistance(
+            pending[0], pending[1],
+            lastRoutedLocation.value[0], lastRoutedLocation.value[1]
+        ) >= ROUTE_REBUILD_DISTANCE
     ) {
-      void requestRoute(
-          pending,
-          false
-      )
+      void requestRoute(pending, false)
     }
   }
 }
@@ -1333,6 +1524,51 @@ const cancelRelocating = () => {
       null
 }
 
+
+// ==========================================================
+// handleShowBestCandidate
+// ==========================================================
+// 1. Стейт вибраного кандидата
+const selectedCandidateIndex = ref<number | null>(null)
+
+// 2. TOP-5 кандидатів для OptimizationLayer та AnalyticsPanel
+const topCandidates = computed<OptimizationCandidate[]>(() => {
+  return optimizationSummary.value?.topCandidates?.slice(0, 5) || []
+})
+
+// 3. Обробник вибору кандидата (з таблиці або маркера)
+const handleSelectCandidate = (candidate: OptimizationCandidate, index: number) => {
+  if (typeof candidate?.latitude !== 'number' || typeof candidate?.longitude !== 'number') return
+
+  selectedCandidateIndex.value = index
+  handleShowBestCandidate(candidate.latitude, candidate.longitude)
+}
+
+// 4. Фокусування карти на кандидаті
+const handleShowBestCandidate = async (lat: number, lng: number) => {
+  currentScreen.value = 'map'
+  await nextTick()
+
+  if (!map.value) return
+
+  map.value.resize()
+
+  // Допоміжна функція центрування (або map.value.flyTo)
+  flyToCoords(lng, lat, 16)
+}
+
+// 5. Запуск оптимізації
+const handleRunOptimization = async () => {
+  if (isOptimizing.value) return
+
+  selectedCandidateIndex.value = null
+
+  const validToilets = approvedToilets.value.filter(
+      (t) => typeof t.latitude === 'number' && typeof t.longitude === 'number'
+  )
+
+  await runOptimizationTest(validToilets)
+}
 // ==========================================================
 // WATCHERS
 // ==========================================================
@@ -1454,11 +1690,10 @@ watch(
         return
       }
 
-      const directDistance =
-          getDistanceMeters(
-              currentLocation,
-              targetCoords
-          )
+      const directDistance = getStraightDistance(
+          currentLocation[0], currentLocation[1],
+          targetCoords[0], targetCoords[1]
+      )
 
       const remainingRouteDistance =
           getRemainingRouteDistance(
@@ -1503,11 +1738,10 @@ watch(
         return
       }
 
-      const distanceSinceLastRoute =
-          getDistanceMeters(
-              currentLocation,
-              lastRoutedLocation.value
-          )
+      const distanceSinceLastRoute = getStraightDistance(
+          currentLocation[0], currentLocation[1],
+          lastRoutedLocation.value[0], lastRoutedLocation.value[1]
+      )
 
       if (
           distanceSinceLastRoute <
@@ -1675,56 +1909,58 @@ watch(
 // ==========================================================
 
 onMounted(async () => {
-  if (
-      localStorage.getItem(
-          'hideAlphaWelcome'
-      ) !== 'true'
-  ) {
-    showWelcomeModal.value =
-        true
+  if (localStorage.getItem('hideAlphaWelcome') !== 'true') {
+    showWelcomeModal.value = true
   }
 
-  window.addEventListener(
-      'resize',
-      handleResize
-  )
+  window.addEventListener('resize', handleResize)
+  await initAuth(currentScreen)
 
-  await initAuth(
-      currentScreen
-  )
+  // Чекаємо, поки DOM буде готовий
+  await nextTick()
 
-  const mapInstance =
-      initMap(
-          'main-map',
+  // Ініціалізуємо мапу
+  initMap('main-map', () => {
+    if (isFollowUserActive.value) {
+      isFollowUserActive.value = false
+    }
+  })
 
-          () => {
-            if (
-                isFollowUserActive.value
-            ) {
-              isFollowUserActive.value =
-                  false
-            }
-          }
-      )
+  // Використовуємо прапорець замість зупинки watch
+  let mapEventsInitialized = false
 
-  // ========================================================
-  // MANUAL / TOILET TARGETING
-  // ========================================================
+  // Додаємо події через watch на map.value
+  watch(map, (mapInstance) => {
+    if (!mapInstance || mapEventsInitialized) return
 
-  mapInstance.on(
-      'moveend',
-      () => {
-        if (
-            isManualSelectionMode.value ||
-            isPickingToiletMode.value
-        ) {
-          syncTemporaryCoordsWithCenter()
-        }
+    // Примусовий resize після ініціалізації
+    setTimeout(() => {
+      mapInstance.resize()
+    }, 100)
+
+    mapInstance.on('moveend', () => {
+      if (isManualSelectionMode.value || isPickingToiletMode.value) {
+        syncTemporaryCoordsWithCenter()
       }
-  )
+    })
+
+    mapInstance.on('click', (e: MapMouseEvent) => {
+      if (isAnalyticsActive.value && isSimulationMode.value) {
+        handleMapClickForAnalytics(e)
+        return
+      }
+
+      if (isPickingToiletMode.value) {
+        temporaryClickedCoords.value = [e.lngLat.lat, e.lngLat.lng]
+        flyToCoords(e.lngLat.lng, e.lngLat.lat, mapInstance.getZoom())
+      }
+    })
+
+    // Позначаємо, що події ініціалізовані
+    mapEventsInitialized = true
+  }, { immediate: true })
 
   await loadToiletsData()
-
   initRealtime()
 })
 
@@ -1767,8 +2003,10 @@ onUnmounted(() => {
     <AppNavigation
         :current-screen="currentScreen"
         :is-admin="isAdmin"
+        :is-analytics-active="isAnalyticsActive"
         @navigate="navigateTo"
         @logout="onLogout"
+        @toggle-analytics="handleToggleAnalytics"
     />
 
     <!-- MAP -->
@@ -1800,6 +2038,7 @@ onUnmounted(() => {
       <AddToiletForm
           :is-open="isAddFormOpen"
           :coords="selectedToiletCoords"
+          :is-submitting="isSubmittingToilet"
           @close="isAddFormOpen = false"
           @submit="handleFormSubmit"
       />
@@ -1819,12 +2058,20 @@ onUnmounted(() => {
 
       <RouteInfoBanner
           :info="routeInfo"
+          :is-analytics-active="isAnalyticsActive"
+          :straight-distance="straightDistanceMeters"
           @close="
-          clearRoute();
-          targetToiletForRoute = null;
-          lastRoutedLocation = null;
-          pendingRouteLocation = null;
-        "
+    clearRoute();
+    targetToiletForRoute = null;
+    lastRoutedLocation = null;
+    pendingRouteLocation = null;
+  "
+      />
+
+      <ReportToiletModal
+          :is-open="isReportModalOpen"
+          :toilet="reportingToilet"
+          @close="isReportModalOpen = false"
       />
 
       <ReportToiletModal
@@ -1930,36 +2177,74 @@ onUnmounted(() => {
           @cancel="cancelRelocating"
       />
 
+      <AnalyticsPanel
+          v-if="isAnalyticsActive"
+          :buffer-radius-km="bufferRadiusKm"
+          :toilets="approvedToilets"
+          :stats="gisStats"
+          :accessibility-stats="accessibilityNetworkStats"
+          :is-loading-network="isCalculatingNetwork"
+          :is-simulation-mode="isSimulationMode"
+          :virtual-toilets="virtualToilets"
+          @calculate-network="recalculateNetworkAccessibility(approvedToilets)"
+          :is-optimizing="isOptimizing"
+          :optimization-progress="optimizationProgress"
+          :optimization-summary="optimizationSummary"
+          @run-optimization="handleRunOptimization"
+          @select-candidate="handleSelectCandidate"
+          @show-candidate="handleShowBestCandidate"
+          @change-radius="handleChangeRadius"
+          @export-csv="handleExportCsv"
+          @export-accessibility-csv="downloadAccessibilityCsvReport(3)"
+          @toggle-simulation="isSimulationMode = !isSimulationMode"
+          @remove-virtual="removeVirtualToilet"
+          @clear-virtual="clearVirtualToilets"
+          @close="handleToggleAnalytics"
+      />
+
+      <!-- Шар кандидатів оптимізації -->
+      <OptimizationLayer
+          v-if="isAnalyticsActive"
+          :map="map"
+          :candidates="topCandidates"
+          :selected-index="selectedCandidateIndex"
+          :visible="true"
+          @select-candidate="handleSelectCandidate"
+      />
+
+
+      <!-- КОНТРОЛИ НА МАПІ -->
       <MapControls
           v-show="
-          !isManualSelectionMode &&
-          !isPickingToiletMode &&
-          !(
-            activeToiletForPopup &&
-            !isDesktop
-          )
-        "
+        !isManualSelectionMode &&
+        !isPickingToiletMode &&
+        !(
+          activeToiletForPopup &&
+          !isDesktop
+        )
+      "
           :is-locating="
-            isLocating ||
-            isRouting
-          "
-          @locate="showLocationPrompt = true"
+          isLocating ||
+          isRouting
+        "
+          @locate="handleGpsLocation"
+          @find-nearest="handleFindNearestToilet"
           @add="startPickingToiletLocation"
           @zoom-in="
-            map?.zoomIn({
-              duration: 300
-            })
-          "
+          map?.zoomIn({
+            duration: 300
+          })
+        "
           @zoom-out="
-            map?.zoomOut({
-              duration: 300
-            })
-          "
+          map?.zoomOut({
+            duration: 300
+          })
+        "
           @compass="
-            map?.resetNorthPitch({
-              duration: 500
-            })
-          "
+          map?.resetNorthPitch({
+            duration: 500
+          })
+        "
       />
     </div>
 

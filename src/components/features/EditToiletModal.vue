@@ -73,8 +73,12 @@ watch(() => props.isOpen, (newVal) => {
 })
 
 const closeModal = () => {
+  // Блокуємо закриття, якщо запит у процесі збереження
+  if (isSaving.value) return
+
   if (newImagePreview.value) {
     URL.revokeObjectURL(newImagePreview.value)
+    newImagePreview.value = null
   }
   emit('close')
 }
@@ -85,11 +89,17 @@ const onImageSelected = async (event: Event) => {
     const originalFile = target.files[0]
     const toiletId = editForm.value.id || 'unknown'
 
+    // Звільняємо попередній preview, якщо фото вибирається повторно
+    if (newImagePreview.value) {
+      URL.revokeObjectURL(newImagePreview.value)
+    }
+
     newImagePreview.value = URL.createObjectURL(originalFile)
     isCompressing.value = true
 
     try {
-      const options = { maxSizeMB: 0.3, maxWidthOrHeight: 1024, useWebWorker: true }
+      // useWebWorker: false для стабільності на iOS
+      const options = { maxSizeMB: 0.3, maxWidthOrHeight: 1024, useWebWorker: false }
       const compressedBlob = await imageCompression(originalFile, options)
       const extension = originalFile.name.split('.').pop() || 'jpeg'
       const fileName = `${toiletId}_${Date.now()}.${extension}`
@@ -161,20 +171,58 @@ const saveEditedToilet = async () => {
 <template>
   <BaseModal :is-open="isOpen" @close="closeModal">
     <!-- 1. ШАПКА-ФОТОГРАФІЯ -->
-    <div class="relative w-full h-48 sm:h-56 bg-slate-100 group border-b border-slate-100 shrink-0">
-      <img v-if="newImagePreview || editPhotoPreview" :src="newImagePreview || editPhotoPreview || undefined" class="w-full h-full object-cover" alt="Фото локації" />
+    <div class="relative w-full h-48 sm:h-56 bg-slate-100 group border-b border-slate-100 shrink-0 overflow-hidden">
+      <!-- Фотографія локації -->
+      <img
+          v-if="newImagePreview || editPhotoPreview"
+          :src="newImagePreview || editPhotoPreview || undefined"
+          class="w-full h-full object-cover transition-transform duration-300"
+          :class="{ 'scale-105 filter blur-xs': isCompressing }"
+          alt="Фото локації"
+      />
       <div v-else class="w-full h-full flex flex-col items-center justify-center text-slate-400">
         <span class="material-symbols-outlined text-[48px] mb-2 opacity-50">add_a_photo</span>
         <span class="text-sm font-semibold tracking-wide uppercase">Фото відсутнє</span>
       </div>
-      <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer" @click="fileInput?.click()">
+
+      <!-- Оверлей завантаження та стиснення фото -->
+      <div
+          v-if="isCompressing"
+          class="absolute inset-0 bg-black/50 backdrop-blur-xs flex flex-col items-center justify-center text-white gap-2 z-10"
+      >
+        <div class="w-8 h-8 border-3 border-white border-t-transparent rounded-full animate-spin"></div>
+        <span class="text-xs font-semibold tracking-wide">Оптимізація зображення...</span>
+      </div>
+
+      <!-- Кнопка заміни фото (активна тільки коли немає стиснення/збереження) -->
+      <div
+          v-else-if="!isSaving"
+          class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer"
+          @click="fileInput?.click()"
+      >
         <span class="bg-white/20 backdrop-blur-md border border-white/30 text-white font-medium px-4 py-2 rounded-xl flex items-center gap-2 shadow-lg">
           <span class="material-symbols-outlined text-[20px]">upload</span>
           {{ (newImagePreview || editPhotoPreview) ? 'Змінити фотографію' : 'Завантажити фото' }}
         </span>
       </div>
-      <input type="file" accept="image/*" class="hidden" ref="fileInput" @change="onImageSelected" />
-      <button @click="closeModal" class="absolute top-4 right-4 w-8 h-8 bg-black/30 hover:bg-black/50 text-white rounded-full flex items-center justify-center backdrop-blur-md transition-colors shadow-sm cursor-pointer">
+
+      <input
+          type="file"
+          accept="image/*"
+          class="hidden"
+          ref="fileInput"
+          :disabled="isCompressing || isSaving"
+          @change="onImageSelected"
+      />
+
+      <!-- Кнопка закриття (блокується під час збереження) -->
+      <button
+          type="button"
+          @click="closeModal"
+          :disabled="isSaving"
+          class="absolute top-4 right-4 w-8 h-8 bg-black/30 hover:bg-black/50 text-white rounded-full flex items-center justify-center backdrop-blur-md transition-colors shadow-sm cursor-pointer disabled:opacity-30 disabled:pointer-events-none z-10"
+          title="Закрити"
+      >
         <span class="material-symbols-outlined text-[18px]">close</span>
       </button>
     </div>
@@ -194,14 +242,14 @@ const saveEditedToilet = async () => {
         <button
             type="button"
             @click="editForm.type = 'public'"
-            :class="['flex-1 py-2 rounded-lg font-medium transition-all', editForm.type === 'public' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500']"
+            :class="['flex-1 py-2 rounded-lg cursor-pointer font-medium transition-all', editForm.type === 'public' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500']"
         >
           Громадська
         </button>
         <button
             type="button"
             @click="editForm.type = 'bio'"
-            :class="['flex-1 py-2 rounded-lg font-medium transition-all', editForm.type === 'bio' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500']"
+            :class="['flex-1 py-2 rounded-lg cursor-pointer font-medium transition-all', editForm.type === 'bio' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500']"
         >
           Біотуалет
         </button>
@@ -235,7 +283,7 @@ const saveEditedToilet = async () => {
 
         <label v-if="editForm.type === 'bio'" class="flex items-center gap-3 p-3 border-2 border-red-50 border-dashed rounded-xl cursor-pointer hover:bg-red-50/50 transition-colors">
           <input type="checkbox" v-model="editForm.is_lock_broken" class="w-5 h-5 accent-red-500">
-          <span class="text-sm font-medium text-slate-700 text-red-600">Зламаний замок?</span>
+          <span class="text-sm font-medium text-red-600">Зламаний замок?</span>
         </label>
       </div>
 

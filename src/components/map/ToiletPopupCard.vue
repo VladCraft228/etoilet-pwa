@@ -40,6 +40,10 @@ const title = computed(() =>
       <h3 class="font-bold text-slate-900 text-base leading-tight mb-0.5">
         {{ title }}
       </h3>
+      <p v-if="toilet.address" class="text-sm text-slate-500 flex items-center gap-1 mt-1">
+        <span class="material-symbols-outlined text-[16px] shrink-0 mt-0.5 text-slate-400">pin_drop</span>
+        <span class="leading-tight">{{ toilet.address }}</span>
+      </p>
 
       <!-- Головна інфо-стрічка: ціна та години роботи -->
       <div v-if="toilet.price !== undefined || toilet.work_hours" class="flex gap-1.5 text-xs w-full shrink-0">

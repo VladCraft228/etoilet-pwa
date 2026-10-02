@@ -1,19 +1,6 @@
-// src/utils/validators.ts
-
-// Описуємо структуру нашої форми
-export interface ToiletFormData {
-    type: 'public' | 'bio'
-    has_washbasin: boolean
-    has_wheelchair_accessible: boolean
-    price: number
-    work_hours: string
-    stalls_count: number
-    urinals_count: number
-    is_lock_broken: boolean
-    comment: string
-}
-
 // Сама функція валідації
+import type {ToiletFormData} from "../../types.ts";
+
 export const validateToiletForm = (form: ToiletFormData, hasPhoto: boolean): string | null => {
     // Валідація для громадських
     if (form.type === 'public') {

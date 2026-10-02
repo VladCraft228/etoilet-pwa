@@ -120,7 +120,7 @@ const toggleExpand = () => {
           <h3 class="font-extrabold text-slate-900 text-[22px] tracking-tight leading-tight mb-1">
             {{ title }}
           </h3>
-          <p v-if="toilet.address" class="text-sm text-slate-500 flex items-start gap-1 mt-1">
+          <p v-if="toilet.address" class="text-sm text-slate-500 flex items-center gap-1 mt-1">
             <span class="material-symbols-outlined text-[16px] shrink-0 mt-0.5 text-slate-400">pin_drop</span>
             <span class="leading-tight">{{ toilet.address }}</span>
           </p>
