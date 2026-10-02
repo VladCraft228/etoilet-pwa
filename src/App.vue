@@ -305,8 +305,6 @@ const reportingToilet =
 // ==========================================================
 // MAP STATE
 // ==========================================================
-const isGpsTrackingActive =
-    ref(false)
 
 const isGpsTrackingActive =
     ref(false)
@@ -432,53 +430,6 @@ const getRemainingRouteDistance = (
         routeCoords[i][0], routeCoords[i][1],
         routeCoords[i + 1][0], routeCoords[i + 1][1]
     )
-  }
-
-  return remainingDistance
-}
-
-const getRemainingRouteDistance = (
-    currentLocation: [number, number],
-    routeCoords: [number, number][]
-): number => {
-  if (routeCoords.length < 2) {
-    return Infinity
-  }
-
-  // Знаходимо найближчу точку поточного маршруту
-  let closestIndex = 0
-  let closestDistance = Infinity
-
-  for (
-      let i = 0;
-      i < routeCoords.length;
-      i++
-  ) {
-    const distance =
-        getDistanceMeters(
-            currentLocation,
-            routeCoords[i]
-        )
-
-    if (distance < closestDistance) {
-      closestDistance = distance
-      closestIndex = i
-    }
-  }
-
-  // Від найближчої точки маршруту до його кінця
-  let remainingDistance = closestDistance
-
-  for (
-      let i = closestIndex;
-      i < routeCoords.length - 1;
-      i++
-  ) {
-    remainingDistance +=
-        getDistanceMeters(
-            routeCoords[i],
-            routeCoords[i + 1]
-        )
   }
 
   return remainingDistance
@@ -2066,12 +2017,6 @@ onUnmounted(() => {
     lastRoutedLocation = null;
     pendingRouteLocation = null;
   "
-      />
-
-      <ReportToiletModal
-          :is-open="isReportModalOpen"
-          :toilet="reportingToilet"
-          @close="isReportModalOpen = false"
       />
 
       <ReportToiletModal

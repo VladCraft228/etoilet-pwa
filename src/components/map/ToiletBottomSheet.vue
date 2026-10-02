@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
-import { getThumbnailUrl } from "../utils/imageUtils.ts";
-import type { Toilet } from "../../types.ts";
+import {ref, computed} from "vue";
+import {getThumbnailUrl} from "../utils/imageUtils.ts";
+import type {Toilet} from "../../types.ts";
 
 type SheetState = 'collapsed' | 'middle' | 'expanded';
 

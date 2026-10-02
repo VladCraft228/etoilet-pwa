@@ -1,4 +1,4 @@
-import {ref, shallowRef} from 'vue'
+import { ref, shallowRef } from 'vue'
 import maplibregl from 'maplibre-gl'
 import type { Point } from 'geojson'
 import type { Toilet } from '../types.ts'
