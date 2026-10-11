@@ -34,7 +34,6 @@ export function calculateGisStats(
         turf.point([t.longitude!, t.latitude!], { id: t.id || index })
     )
 
-    // featureColl видалено, щоб не засмічувати пам'ять і прибрати TS6133
 
     const nearestDistances: number[] = []
 
@@ -48,8 +47,7 @@ export function calculateGisStats(
         nearestDistances.push(distMeters)
     })
 
-    const sum = nearestDistances.reduce((acc, d) => acc + d, 0)
-    const avg = sum / nearestDistances.length
+    const avg = average(nearestDistances)
     const min = Math.min(...nearestDistances)
     const max = Math.max(...nearestDistances)
 

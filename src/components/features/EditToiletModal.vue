@@ -258,7 +258,7 @@ const saveEditedToilet = async () => {
 
       <!-- Адреса -->
       <div class="flex flex-col gap-1">
-        <span class="text-[10px] uppercase font-bold text-slate-400 ml-1">Адреса (необов'язково)</span>
+        <span class="text-[10px] uppercase font-bold text-slate-400 ml-1">Адреса</span>
         <input
             type="text"
             v-model="editForm.address"

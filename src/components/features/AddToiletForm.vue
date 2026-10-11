@@ -39,7 +39,7 @@ const form = reactive<ToiletFormData>({
   stalls_count: 1,
   urinals_count: 0,
   is_lock_broken: false,
-  comment: ''
+  location_hint: ''
 })
 
 const photoPreview = ref<string | null>(null)
@@ -70,7 +70,7 @@ const resetForm = () => {
   form.is_lock_broken = false
   form.work_hours = ''
   form.price = 0
-  form.comment = ''
+  form.location_hint = ''
   form.stalls_count = 1
   form.urinals_count = 0
   openTime.value = ''
@@ -301,7 +301,7 @@ const submitForm = () => {
       <div class="flex flex-col gap-2">
         <span class="text-[10px] uppercase font-bold text-slate-400 ml-1">Коментар / Орієнтир</span>
         <textarea
-            v-model="form.comment"
+            v-model="form.location_hint"
             placeholder="Наприклад: за залізничним вокзалом..."
             rows="2"
             class="p-3 bg-slate-50 rounded-xl text-sm focus:outline-indigo-600 resize-none transition-colors"

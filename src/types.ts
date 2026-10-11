@@ -34,7 +34,7 @@ export interface ToiletFormData {
     stalls_count: number
     urinals_count: number
     is_lock_broken: boolean
-    comment: string
+    location_hint: string
 }
 
 export interface ToiletReport {

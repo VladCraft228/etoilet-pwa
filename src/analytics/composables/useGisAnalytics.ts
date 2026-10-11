@@ -1,7 +1,6 @@
 import { ref } from 'vue'
 import type { Toilet } from '../../types'
 import { createBufferPolygons } from '../utils/buffers'
-import { calculateCircuity } from '../utils/circuity'
 import { calculateGisStats, exportGisReportCsv } from '../utils/stats'
 import { DNIPRO_CONTROL_POINTS } from '../data/controlPoints'
 import {
@@ -235,7 +234,6 @@ export function useGisAnalytics() {
         clearVirtualToilets,
         recalculateNetworkAccessibility,
         getBuffersGeoJSON,
-        calculateCircuity,
         isOptimizing,
         optimizationProgress,
         optimizationSummary,

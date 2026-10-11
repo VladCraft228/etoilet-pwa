@@ -10,20 +10,6 @@ export interface CandidateBenchmarkResult {
     summary: AccessibilitySummary
 }
 
-export interface CandidateBenchmarkComparison {
-    maxCandidates: number
-    accessible5MinPercent: number
-    accessible10MinPercent: number
-    avgWalkingDistanceMeters: number
-    medianWalkingDistanceMeters: number
-    avgWalkingTimeMins: number
-    medianWalkingTimeMins: number
-    avgCircuityFactor: number
-    medianCircuityFactor: number
-    analyzedControlPoints: number
-    failedControlPoints: number
-}
-
 export async function runCandidateBenchmark(
     controlPoints: ControlPoint[],
     toilets: Toilet[],
@@ -74,42 +60,4 @@ export async function runCandidateBenchmark(
     }
 
     return results
-}
-
-export function compareCandidateBenchmark(
-    benchmark: CandidateBenchmarkResult[]
-): CandidateBenchmarkComparison[] {
-    return benchmark.map(item => ({
-        maxCandidates: item.maxCandidates,
-
-        accessible5MinPercent:
-        item.summary.accessible5MinPercent,
-
-        accessible10MinPercent:
-        item.summary.accessible10MinPercent,
-
-        avgWalkingDistanceMeters:
-        item.summary.avgWalkingDistanceMeters,
-
-        medianWalkingDistanceMeters:
-        item.summary.medianWalkingDistanceMeters,
-
-        avgWalkingTimeMins:
-        item.summary.avgWalkingTimeMins,
-
-        medianWalkingTimeMins:
-        item.summary.medianWalkingTimeMins,
-
-        avgCircuityFactor:
-        item.summary.avgCircuityFactor,
-
-        medianCircuityFactor:
-        item.summary.medianCircuityFactor,
-
-        analyzedControlPoints:
-        item.summary.analyzedControlPoints,
-
-        failedControlPoints:
-        item.summary.failedControlPoints
-    }))
 }
