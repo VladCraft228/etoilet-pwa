@@ -81,31 +81,33 @@ const handleLogout = () => {
             class="absolute bottom-15 left-0 w-72 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-slate-200/90 p-3 flex flex-col gap-2 z-50 origin-bottom-left"
         >
 
-          <!-- СЕКЦІЯ 1: ГІС-АНАЛІТИКА -->
-          <div class="p-2.5 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-between">
-            <div class="flex items-center gap-2.5">
-              <span class="material-symbols-outlined text-indigo-600 text-[22px]">analytics</span>
-              <div>
-                <p class="text-xs font-bold text-slate-800 leading-tight">ГІС-аналітика</p>
-                <p class="text-[10px] text-slate-400">Шар буферів та ТОП-5</p>
+          <!-- СЕКЦІЯ 1: ГІС-АНАЛІТИКА (ДОСТУПНА ТІЛЬКИ АДМІНІСТРАТОРУ) -->
+          <template v-if="isAdmin">
+            <div class="p-2.5 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-between">
+              <div class="flex items-center gap-2.5">
+                <span class="material-symbols-outlined text-indigo-600 text-[22px]">analytics</span>
+                <div>
+                  <p class="text-xs font-bold text-slate-800 leading-tight">ГІС-аналітика</p>
+                  <p class="text-[10px] text-slate-400">Шар буферів та ТОП-5</p>
+                </div>
               </div>
+
+              <!-- Тумблер активації режиму -->
+              <button
+                  type="button"
+                  @click="emit('toggle-analytics')"
+                  class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+                  :class="isAnalyticsActive ? 'bg-indigo-600' : 'bg-slate-200'"
+              >
+                <span
+                    class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out"
+                    :class="isAnalyticsActive ? 'translate-x-5' : 'translate-x-0'"
+                />
+              </button>
             </div>
 
-            <!-- Тумблер активації режиму -->
-            <button
-                type="button"
-                @click="emit('toggle-analytics')"
-                class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
-                :class="isAnalyticsActive ? 'bg-indigo-600' : 'bg-slate-200'"
-            >
-              <span
-                  class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out"
-                  :class="isAnalyticsActive ? 'translate-x-5' : 'translate-x-0'"
-              />
-            </button>
-          </div>
-
-          <div class="h-px bg-slate-100 my-0.5"></div>
+            <div class="h-px bg-slate-100 my-0.5"></div>
+          </template>
 
           <!-- СЕКЦІЯ 2: АДМІНІСТРАТОР -->
           <div class="flex flex-col gap-1">

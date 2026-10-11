@@ -4,6 +4,9 @@ import { useToast } from "vue-toastification"
 
 const toast = useToast()
 
+// Максимально допустима похибка для пішохідної навігації (відсікає РЕБ/вишки)
+const MAX_ACCEPTABLE_ACCURACY_METERS = 70
+
 export function useGeolocation() {
     const userLocation = ref<[number, number] | null>(null)
     const isLocating = ref(false)
@@ -23,23 +26,27 @@ export function useGeolocation() {
         isLocating.value = true
 
         let hasFirstFix = false
-        let bestAccuracy = Infinity
 
-        // Страховка: якщо пристрій думає довше 10 секунд і не дав жодної точки — знімаємо спінер
+        // Страховка на випадок повного глушіння сигналу
         const fallbackTimer = setTimeout(() => {
             if (!hasFirstFix && isLocating.value) {
                 isLocating.value = false
-                toast.info('Не вдалося отримати точний сигнал. Спробуйте оновити пізніше.')
+                toast.info('Слабкий сигнал GPS. Можливо, працюють засоби РЕБ.')
                 onErrorFallback?.()
             }
-        }, 10000)
+        }, 12000)
 
         watchId.value = navigator.geolocation.watchPosition(
             (position) => {
                 const { latitude, longitude, accuracy: currentAccuracy } = position.coords
 
-                // 1. ПЕРШИЙ ФІКС: приймаємо БУДЬ-ЯКУ першу точку миттєво!
-                // Це знімає вічний лоадер на ПК та в приміщеннях.
+                // Якщо сигнал має похибку більше 150-200м — це гарантований збій вишки/глушіння
+                if (currentAccuracy > 150) {
+                    console.warn(`[GPS Filter] Відхилено сигнал низької точності: ${Math.round(currentAccuracy)}м`)
+                    return
+                }
+
+                // 1. ПЕРШИЙ ФІКС
                 if (!hasFirstFix) {
                     clearTimeout(fallbackTimer)
                     hasFirstFix = true
@@ -47,19 +54,16 @@ export function useGeolocation() {
 
                     userLocation.value = [latitude, longitude]
                     accuracy.value = currentAccuracy
-                    bestAccuracy = currentAccuracy
-
                     onSuccess(latitude, longitude)
                     return
                 }
 
-                // 2. ПОДАЛЬШЕ УТОЧНЕННЯ (коли пристрій рухається або сигнал став кращим)
-                // Оновлюємо, якщо точність краща за попередню, або якщо сигнал дуже точний (<= 25m)
-                if (currentAccuracy < bestAccuracy || currentAccuracy <= 25) {
+                // 2. ВІДСТЕЖЕННЯ В РУСІ:
+                // Приймаємо будь-які координати з адекватною для міста точністю (<= 70м).
+                // Не блокуємо трекінг, якщо точність просто незначно коливається (напр. з 10м до 30м).
+                if (currentAccuracy <= MAX_ACCEPTABLE_ACCURACY_METERS) {
                     userLocation.value = [latitude, longitude]
                     accuracy.value = currentAccuracy
-                    bestAccuracy = Math.min(bestAccuracy, currentAccuracy)
-
                     onSuccess(latitude, longitude)
                 }
             },
@@ -80,8 +84,8 @@ export function useGeolocation() {
             },
             {
                 enableHighAccuracy: true,
-                maximumAge: 30000, // Дозволяємо браузеру віддати позицію за останні 30с — це дає миттєвий результат
-                timeout: 10000     // 10 секунд на пошук
+                maximumAge: 0,    // Забороняємо брати закешовані 30-секундні точки
+                timeout: 10000
             }
         )
     }

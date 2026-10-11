@@ -32,7 +32,7 @@ export const toiletService = {
             latitude: formData.coords[0],
             longitude: formData.coords[1],
             has_washbasin: formData.has_washbasin,
-            user_comment: formData.comment,
+            location_hint: formData.comment,
             has_wheelchair_accessible: formData.type === 'public' ? formData.has_wheelchair_accessible : false,
             price: formData.type === 'public' ? formData.price : 0,
             work_hours: formData.type === 'public' ? formData.work_hours : null,

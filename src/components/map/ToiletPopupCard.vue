@@ -52,7 +52,7 @@ const title = computed(() =>
         <div class="flex-1 w-1/2 min-w-0 flex items-center gap-1 p-1.5 bg-emerald-50/80 border border-emerald-100 rounded-lg">
           <span class="material-symbols-outlined text-[18px] text-emerald-600 shrink-0">payments</span>
           <div class="flex flex-col min-w-0">
-            <span class="text-[9px] text-emerald-700/80 font-medium leading-tight">Вартість</span>
+            <span class="text-[10px] text-emerald-700/80 font-medium leading-tight">Вартість</span>
             <span class="font-bold text-emerald-950 text-[10px] sm:text-xs leading-tight wrap-break-word">
               {{ toilet.price === 0 ? 'Безкоштовно' : `${toilet.price} грн` }}
             </span>
@@ -63,7 +63,7 @@ const title = computed(() =>
         <div v-if="toilet.work_hours" class="flex-1 w-1/2 min-w-0 flex items-center gap-1 p-1.5 bg-slate-50 border border-slate-100 rounded-lg">
           <span class="material-symbols-outlined text-[18px] text-slate-500 shrink-0">schedule</span>
           <div class="flex flex-col min-w-0">
-            <span class="text-[9px] text-slate-400 font-medium leading-tight">Час роботи</span>
+            <span class="text-[10px] text-slate-400 font-medium leading-tight">Час роботи</span>
             <span class="font-bold text-slate-800 text-[10px] sm:text-xs leading-tight wrap-break-word">
               {{ toilet.work_hours }}
             </span>
@@ -148,17 +148,20 @@ const title = computed(() =>
         </template>
       </div>
 
-      <!-- Коментар -->
+      <!-- Орієнтир / Як знайти -->
       <div
-          v-if="toilet.user_comment"
-          class="bg-amber-50/40 p-3 rounded-xl border border-dashed border-amber-200 mt-1"
+          v-if="toilet.location_hint"
+          class="bg-amber-50/60 border border-amber-200/70 rounded-xl p-2.5 mt-2 flex items-start gap-2"
       >
-        <div class="max-h-11 overflow-y-auto custom-scrollbar">
-          <p class="text-[13px] text-slate-700 italic relative font-medium leading-relaxed">
-            <span class="absolute -top-1 -left-1 text-amber-300 text-lg">"</span>
-            <span class="pl-2.5 block">
-              {{ toilet.user_comment }}
-            </span>
+  <span class="material-symbols-outlined text-amber-600 text-[18px] shrink-0 mt-0.5">
+    explore
+  </span>
+        <div class="flex-1 min-w-0">
+    <span class="block text-[10px] font-bold uppercase tracking-wider text-amber-700/80">
+      Як знайти / Орієнтир
+    </span>
+          <p class="text-[12px] text-slate-700 font-medium leading-snug line-clamp-2 break-words mt-0.5">
+            {{ toilet.location_hint }}
           </p>
         </div>
       </div>

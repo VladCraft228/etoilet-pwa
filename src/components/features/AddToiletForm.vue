@@ -131,6 +131,30 @@ const submitForm = () => {
     return
   }
 
+  // Географічні межі
+  const isWithinUkraine = (lat: number, lng: number): boolean => {
+    return lat >= 44.0 && lat <= 52.5 && lng >= 22.0 && lng <= 40.3
+  }
+
+  const isWithinDnipro = (lat: number, lng: number): boolean => {
+    return lat >= 48.30 && lat <= 48.65 && lng >= 34.70 && lng <= 35.35
+  }
+
+  const [lat, lng] = props.coords
+
+  // 1. Жорсткий захист: не пускаємо за кордон або помилкові нулі
+  if (!isWithinUkraine(lat, lng)) {
+    toast.error('Координати повинні знаходитися в межах України!')
+    return
+  }
+
+  // 2. М'яке інформування: приймаємо точку, але пояснюємо поточний статус сервісу
+  if (!isWithinDnipro(lat, lng)) {
+    toast.info('Точка за межами Дніпра. Її буде опрацьовано при розширенні сервісу на інші міста.', {
+      timeout: 6000
+    })
+  }
+
   if (form.type === 'public') {
     if (is24Hours.value) {
       form.work_hours = 'Цілодобово'

@@ -1,17 +1,17 @@
-import {ref} from 'vue'
-import type {Toilet} from '../../types'
-import {createBufferPolygons} from '../utils/buffers'
-import {calculateCircuity} from '../utils/circuity'
-import {calculateGisStats, exportGisReportCsv} from '../utils/stats'
-import {DNIPRO_CONTROL_POINTS} from '../data/controlPoints'
+import { ref } from 'vue'
+import type { Toilet } from '../../types'
+import { createBufferPolygons } from '../utils/buffers'
+import { calculateCircuity } from '../utils/circuity'
+import { calculateGisStats, exportGisReportCsv } from '../utils/stats'
+import { DNIPRO_CONTROL_POINTS } from '../data/controlPoints'
 import {
     type AccessibilitySummary,
     evaluateControlPointsAccessibilityNetwork,
     exportAccessibilityResultsCsv,
 } from '../utils/accessibility'
-import {runCandidateBenchmark} from '../utils/accessibilityBenchmark'
-import {evaluateCandidate, generateCandidateGrid} from '../utils/optimization'
-import type {OptimizationCandidate, OptimizationSummary} from '../types/optimizationType'
+import { runCandidateBenchmark } from '../utils/accessibilityBenchmark'
+import { evaluateCandidate, generateCandidateGrid } from '../utils/optimization'
+import type { OptimizationCandidate, OptimizationSummary } from '../types/optimizationType'
 
 // ==========================================
 // 1. УТИЛІТИ КЕШУВАННЯ В LOCALSTORAGE
@@ -59,6 +59,12 @@ export function useGisAnalytics() {
         loadFromStorage<AccessibilitySummary>(CACHE_KEYS.ACCESSIBILITY)
     )
 
+    // Хелпер для об'єднання реальних та симульованих точок (DRY)
+    const getCombinedToilets = (realToilets: Toilet[]): Toilet[] => [
+        ...realToilets,
+        ...virtualToilets.value
+    ]
+
     const setBufferRadius = (radiusKm: number) => {
         bufferRadiusKm.value = radiusKm
     }
@@ -85,12 +91,11 @@ export function useGisAnalytics() {
 
     const recalculateNetworkAccessibility = async (realToilets: Toilet[]) => {
         isCalculatingNetwork.value = true
-        const combinedToilets = [...realToilets, ...virtualToilets.value]
 
         try {
             const stats = await evaluateControlPointsAccessibilityNetwork(
                 DNIPRO_CONTROL_POINTS,
-                combinedToilets
+                getCombinedToilets(realToilets)
             )
             accessibilityNetworkStats.value = stats
             saveToStorage(CACHE_KEYS.ACCESSIBILITY, stats)
@@ -100,11 +105,9 @@ export function useGisAnalytics() {
     }
 
     const runAccessibilityBenchmark = async (realToilets: Toilet[]) => {
-        const combinedToilets = [...realToilets, ...virtualToilets.value]
-
         return await runCandidateBenchmark(
             DNIPRO_CONTROL_POINTS,
-            combinedToilets,
+            getCombinedToilets(realToilets),
             [1, 3, 5, 10]
         )
     }
@@ -113,42 +116,30 @@ export function useGisAnalytics() {
         realToilets: Toilet[],
         candidates: Array<{ latitude: number; longitude: number }>,
         baseline: AccessibilitySummary,
-        onProgress?: (percent: number) => void
+        onProgress?: (p: number) => void
     ): Promise<OptimizationCandidate[]> => {
         const results: OptimizationCandidate[] = []
-
-        // Послідовний прохід по кандидатах для запобігання rate-limit / 502 OSRM
         for (let i = 0; i < candidates.length; i++) {
-            const candidate = candidates[i]
-
+            const { latitude: lat, longitude: lng } = candidates[i]
             const virtualToilet: Toilet = {
-                id: `optimization-${candidate.latitude}-${candidate.longitude}`,
+                id: `opt-${lat}-${lng}`,
                 type: 'public',
                 status: 'virtual',
-                latitude: candidate.latitude,
-                longitude: candidate.longitude,
-                address: 'Optimization candidate',
+                latitude: lat,
+                longitude: lng,
+                address: 'Candidate'
             }
-
             const result = await evaluateControlPointsAccessibilityNetwork(
                 DNIPRO_CONTROL_POINTS,
                 [...realToilets, virtualToilet]
             )
-
-            results.push(
-                evaluateCandidate(candidate.latitude, candidate.longitude, baseline, result)
-            )
-
-            if (onProgress) {
-                onProgress(Math.round(((i + 1) / candidates.length) * 100))
-            }
+            results.push(evaluateCandidate(lat, lng, baseline, result))
+            onProgress?.(Math.round(((i + 1) / candidates.length) * 100))
         }
-
-        return results.sort(
-            (a, b) =>
-                b.deltaCoverage5 - a.deltaCoverage5 ||
-                b.deltaCoverage10 - a.deltaCoverage10 ||
-                a.avgWalkingDistance - b.avgWalkingDistance
+        return results.sort((a, b) =>
+            b.deltaCoverage5 - a.deltaCoverage5 ||
+            b.deltaCoverage10 - a.deltaCoverage10 ||
+            a.avgWalkingDistance - b.avgWalkingDistance
         )
     }
 
@@ -160,13 +151,11 @@ export function useGisAnalytics() {
 
         try {
             const candidates = generateCandidateGrid(48.39, 48.54, 34.91, 35.09, 0.02)
-            // 1. Обчислюємо baseline один раз тут
             const baseline = await evaluateControlPointsAccessibilityNetwork(
                 DNIPRO_CONTROL_POINTS,
                 realToilets
             )
 
-            // 2. Передаємо вже готовий baseline у функцію
             const results = await optimizeOneToiletPlacement(
                 realToilets,
                 candidates,
@@ -201,19 +190,17 @@ export function useGisAnalytics() {
     }
 
     const getBuffersGeoJSON = (realToilets: Toilet[]) => {
-        const combinedToilets = [...realToilets, ...virtualToilets.value]
-        return createBufferPolygons(combinedToilets, bufferRadiusKm.value)
+        return createBufferPolygons(getCombinedToilets(realToilets), bufferRadiusKm.value)
     }
 
     const getSummaryStats = (realToilets: Toilet[]) => {
-        const combinedToilets = [...realToilets, ...virtualToilets.value]
-        return calculateGisStats(combinedToilets, bufferRadiusKm.value)
+        return calculateGisStats(getCombinedToilets(realToilets), bufferRadiusKm.value)
     }
 
     const downloadCsvReport = (realToilets: Toilet[]) => {
-        const combinedToilets = [...realToilets, ...virtualToilets.value]
-        const stats = calculateGisStats(combinedToilets, bufferRadiusKm.value)
-        exportGisReportCsv(combinedToilets, stats)
+        const combined = getCombinedToilets(realToilets)
+        const stats = calculateGisStats(combined, bufferRadiusKm.value)
+        exportGisReportCsv(combined, stats)
     }
 
     const downloadAccessibilityCsvReport = (maxCandidates: number = 3) => {
@@ -222,11 +209,15 @@ export function useGisAnalytics() {
         }
     }
 
-    const clearGisCache = () => {
+    const clearGisCache = (clearRoutes: boolean = false) => {
         accessibilityNetworkStats.value = null
         optimizationSummary.value = null
         localStorage.removeItem(CACHE_KEYS.ACCESSIBILITY)
         localStorage.removeItem(CACHE_KEYS.OPTIMIZATION)
+
+        if (clearRoutes) {
+            localStorage.removeItem(CACHE_KEYS.OSRM_ROUTES)
+        }
     }
 
     return {

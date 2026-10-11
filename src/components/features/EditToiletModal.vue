@@ -150,7 +150,7 @@ const saveEditedToilet = async () => {
       is_lock_broken: !!editForm.value.is_lock_broken,
       has_washbasin: !!editForm.value.has_washbasin,
 
-      user_comment: editForm.value.user_comment,
+      location_hint: editForm.value.location_hint,
       moderator_comment: editForm.value.moderator_comment
     }
 
@@ -258,7 +258,7 @@ const saveEditedToilet = async () => {
 
       <!-- Адреса -->
       <div class="flex flex-col gap-1">
-        <span class="text-[10px] uppercase font-bold text-slate-400 ml-1">Адреса</span>
+        <span class="text-[10px] uppercase font-bold text-slate-400 ml-1">Адреса (необов'язково)</span>
         <input
             type="text"
             v-model="editForm.address"
@@ -338,7 +338,18 @@ const saveEditedToilet = async () => {
         </div>
 
       </div>
-
+      <!-- Коментар користувача -->
+      <div class="flex flex-col gap-1">
+        <div class="flex items-center justify-between ml-1">
+          <span class="text-[10px] uppercase font-bold text-slate-400">Орієнтир / Опис розташування</span>
+        </div>
+        <textarea
+            v-model="editForm.location_hint"
+            rows="2"
+            placeholder="Наприклад: вхід з двору, цокольний поверх..."
+            class="p-3 bg-slate-50 rounded-xl text-sm focus:outline-indigo-600 resize-none transition-colors border border-transparent focus:bg-white"
+        ></textarea>
+      </div>
       <!-- Нотатка модератора -->
       <div class="flex flex-col gap-1">
         <span class="text-[10px] uppercase font-bold text-slate-400 ml-1">Нотатка модератора</span>

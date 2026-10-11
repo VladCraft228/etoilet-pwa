@@ -1524,6 +1524,19 @@ const handleRunOptimization = async () => {
 // WATCHERS
 // ==========================================================
 
+
+// ----------------------------------------------------------
+// ANALYTICS MODULE
+// ----------------------------------------------------------
+watch(isAdmin, (loggedIn) => {
+  if (!loggedIn && isAnalyticsActive.value) {
+    isAnalyticsActive.value = false
+    clearAnalyticsBuffers()
+    clearVirtualMarkers()
+    clearControlPointsLayer()
+  }
+})
+
 // ----------------------------------------------------------
 // TOILETS
 // ----------------------------------------------------------

@@ -249,12 +249,23 @@ const toggleExpand = () => {
           </template>
         </div>
 
-        <!-- Коментар користувача -->
-        <div v-if="toilet.user_comment" class="mx-5 bg-amber-50/40 p-3.5 rounded-xl border border-dashed border-amber-200 mt-5">
-          <p class="text-[13px] text-slate-700 italic relative font-medium">
-            <span class="absolute -top-1 -left-1.5 text-amber-300 text-xl leading-none">"</span>
-            <span class="pl-3">{{ toilet.user_comment }}</span>
-          </p>
+        <!-- Орієнтир / Підказка розташування -->
+        <div
+            v-if="toilet.location_hint"
+            class="mx-5 mt-4 p-3.5 bg-amber-50/50 border border-amber-200/80 rounded-2xl flex items-start gap-3 shadow-xs"
+        >
+          <div class="w-7 h-7 rounded-lg bg-amber-100 flex items-center justify-center shrink-0 text-amber-700">
+            <span class="material-symbols-outlined text-[18px]">explore</span>
+          </div>
+
+          <div class="flex-1 min-w-0">
+    <span class="text-[10px] font-bold uppercase tracking-wider text-amber-800/80 block">
+      Як знайти / Орієнтир
+    </span>
+            <p class="text-[13px] text-slate-700 leading-relaxed font-medium break-words mt-0.5">
+              {{ toilet.location_hint }}
+            </p>
+          </div>
         </div>
 
         <!-- Інструменти адміна -->

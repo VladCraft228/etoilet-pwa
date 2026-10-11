@@ -5,12 +5,12 @@ import type { ToiletReport } from '../types'
 export const reportService = {
     // Надіслати скаргу
     async submitToiletReport(report: ToiletReport) {
-        const { data, error } = await supabase
+        const { error } = await supabase
             .from('toilet_reports')
             .insert([report])
-            .select()
+
         if (error) throw error
-        return data
+        return true
     },
 
     // Отримати активні скарги разом із вбиральнями (Foreign Table Join)
@@ -18,12 +18,12 @@ export const reportService = {
         const { data, error } = await supabase
             .from('toilet_reports')
             .select(`
-      *,
-      toilet:toilets(
-        *,
-        toilet_images(*)
-      )
-    `)
+                *,
+                toilet:toilets(
+                    *,
+                    toilet_images(*)
+                )
+            `)
             .eq('status', 'pending')
             .order('created_at', { ascending: false })
 

@@ -259,8 +259,8 @@ onMounted(() => {
                   </span>
                 </div>
 
-                <p v-if="toilet.user_comment" class="text-sm text-slate-600 italic mb-3 line-clamp-2">
-                  «{{ toilet.user_comment }}»
+                <p v-if="toilet.location_hint" class="text-sm text-slate-600 italic mb-3 line-clamp-2">
+                  «{{ toilet.location_hint }}»
                 </p>
                 <p class="text-sm text-slate-400 italic mb-3" v-else>Коментар відсутній</p>
 

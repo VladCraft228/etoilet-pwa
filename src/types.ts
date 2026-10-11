@@ -19,8 +19,7 @@ export interface Toilet {
     has_wheelchair_accessible?: boolean
     is_lock_broken?: boolean
     has_washbasin?: boolean
-    cleanliness_rating?: number
-    user_comment?: string
+    location_hint?: string
     moderator_comment?: string
     created_at?: string
     toilet_images?: ToiletImage[]
@@ -38,13 +37,6 @@ export interface ToiletFormData {
     comment: string
 }
 
-export type ReportReason =
-    | 'does_not_exist'
-    | 'accessibility_issue'
-    | 'closed_or_broken'
-    | 'wrong_info'
-    | 'other'
-
 export interface ToiletReport {
     id?: string
     toilet_id: string
@@ -53,6 +45,14 @@ export interface ToiletReport {
     status?: 'pending' | 'resolved' | 'dismissed'
     created_at?: string
 }
+
+export type ReportReason =
+    | 'does_not_exist'
+    | 'accessibility_issue'
+    | 'closed_or_broken'
+    | 'wrong_info'
+    | 'other'
+
 
 export const REPORT_REASONS_LABELS: Record<ReportReason, { title: string; icon: string }> = {
     does_not_exist: {
