@@ -1,12 +1,14 @@
 import { ref } from 'vue'
+import * as turf from '@turf/turf'
 import type { Toilet } from '../../types'
 import { createBufferPolygons } from '../utils/buffers'
-import { calculateGisStats, exportGisReportCsv } from '../utils/stats'
+import { calculateGisStats, exportGisReportCsv, exportGisReportHtml } from '../utils/spatialStats'
 import { DNIPRO_CONTROL_POINTS } from '../data/controlPoints'
 import {
     type AccessibilitySummary,
     evaluateControlPointsAccessibilityNetwork,
     exportAccessibilityResultsCsv,
+    exportAccessibilityReportHtml
 } from '../utils/accessibility'
 import { runCandidateBenchmark } from '../utils/accessibilityBenchmark'
 import { evaluateCandidate, generateCandidateGrid } from '../utils/optimization'
@@ -19,10 +21,11 @@ import type { OptimizationCandidate, OptimizationSummary } from '../types/optimi
 const CACHE_KEYS = {
     ACCESSIBILITY: 'etoilet_gis_accessibility_stats',
     OPTIMIZATION: 'etoilet_gis_optimization_summary',
-    OSRM_ROUTES: 'etoilet_osrm_network_cache'
+    OSRM_ROUTES: 'etoilet_osrm_network_cache',
+    VIRTUAL_TOILETS: 'etoilet_gis_virtual_toilets'
 } as const
 
-// Безпечне читання з localStorage (із захистом від Incognito та помилок парсингу)
+// Безпечне читання з localStorage
 function loadFromStorage<T>(key: string): T | null {
     try {
         const raw = localStorage.getItem(key)
@@ -33,7 +36,7 @@ function loadFromStorage<T>(key: string): T | null {
     }
 }
 
-// Безпечний запис (із захистом від перевищення квоти пам'яті)
+// Безпечний запис
 function saveToStorage(key: string, data: any): void {
     try {
         localStorage.setItem(key, JSON.stringify(data))
@@ -46,13 +49,22 @@ export function useGisAnalytics() {
     const isAnalyticsActive = ref(false)
     const isSimulationMode = ref(false)
     const isCalculatingNetwork = ref(false)
+    const networkProgress = ref(0)
     const isOptimizing = ref(false)
+    const isOptimizationOutdated = ref(false)
     const optimizationProgress = ref(0)
     const optimizationSummary = ref<OptimizationSummary | null>(
         loadFromStorage<OptimizationSummary>(CACHE_KEYS.OPTIMIZATION)
     )
     const bufferRadiusKm = ref(0.5)
-    const virtualToilets = ref<Toilet[]>([])
+    const virtualToilets = ref<Toilet[]>(
+        loadFromStorage<Toilet[]>(CACHE_KEYS.VIRTUAL_TOILETS) || []
+    )
+
+    // Допоміжна функція збереження віртуальних точок
+    const syncVirtualToiletsStorage = () => {
+        saveToStorage(CACHE_KEYS.VIRTUAL_TOILETS, virtualToilets.value)
+    }
 
     const accessibilityNetworkStats = ref<AccessibilitySummary | null>(
         loadFromStorage<AccessibilitySummary>(CACHE_KEYS.ACCESSIBILITY)
@@ -78,14 +90,20 @@ export function useGisAnalytics() {
             address: `Тестова точка #${virtualToilets.value.length + 1}`,
         }
         virtualToilets.value.push(newVirtual)
+        syncVirtualToiletsStorage() // <-- Зберігаємо в кеш
+        isOptimizationOutdated.value = true
     }
 
     const removeVirtualToilet = (id: string) => {
         virtualToilets.value = virtualToilets.value.filter((t) => t.id !== id)
+        syncVirtualToiletsStorage() // <-- Зберігаємо в кеш
+        isOptimizationOutdated.value = true
     }
 
     const clearVirtualToilets = () => {
         virtualToilets.value = []
+        localStorage.removeItem(CACHE_KEYS.VIRTUAL_TOILETS) // <-- Очищаємо кеш точок
+        isOptimizationOutdated.value = true
     }
 
     const recalculateNetworkAccessibility = async (realToilets: Toilet[]) => {
@@ -94,8 +112,16 @@ export function useGisAnalytics() {
         try {
             const stats = await evaluateControlPointsAccessibilityNetwork(
                 DNIPRO_CONTROL_POINTS,
-                getCombinedToilets(realToilets)
+                getCombinedToilets(realToilets),
+                {
+                    maxCandidates: 3,
+                    bufferRadiusKm: bufferRadiusKm.value
+                },
+                (current, total, _message) => {
+                    networkProgress.value = Math.round((current / total) * 100)
+                }
             )
+
             accessibilityNetworkStats.value = stats
             saveToStorage(CACHE_KEYS.ACCESSIBILITY, stats)
         } finally {
@@ -118,8 +144,40 @@ export function useGisAnalytics() {
         onProgress?: (p: number) => void
     ): Promise<OptimizationCandidate[]> => {
         const results: OptimizationCandidate[] = []
-        for (let i = 0; i < candidates.length; i++) {
+        const total = candidates.length
+
+        // Отримуємо список контрольних точок, які ще НЕ мали 5-хв або 10-хв доступності
+        const uncoveredPoints = baseline.results.filter(
+            (r) => !r.isAccessible5Min || !r.isAccessible10Min
+        )
+
+        console.log(`🔍 Кількість потенційних точок для перевірки: ${total}`)
+        console.log(`📍 Непокритих або проблемних контрольних точок: ${uncoveredPoints.length}`)
+
+        for (let i = 0; i < total; i++) {
             const { latitude: lat, longitude: lng } = candidates[i]
+
+            // ШВИДКИЙ ПРОСТОРОВИЙ ФІЛЬТР (Pre-filtering):
+            // Перевіряємо, чи знаходиться кандидат у межах 1500м по прямій хоча б від однієї непокритої точки
+            const candPoint = turf.point([lng, lat])
+            const isNearUncovered = uncoveredPoints.some((uncovered) => {
+                const ptPoint = turf.point([
+                    uncovered.point.longitude,
+                    uncovered.point.latitude
+                ])
+                const distMeters = turf.distance(candPoint, ptPoint, { units: 'meters' })
+                return distMeters <= 1500
+            })
+
+            // Якщо кандидат знаходиться занадто далеко від усіх проблемних точок, пропускаємо запити до OSRM
+            if (uncoveredPoints.length > 0 && !isNearUncovered) {
+                console.log(`⏭️ [${i + 1}/${total}] Кандидат [${lat.toFixed(4)}, ${lng.toFixed(4)}] пропущений (занадто далеко від дефіцитних зон).`)
+                onProgress?.(Math.round(((i + 1) / total) * 100))
+                continue
+            }
+
+            console.log(`⏳ [${i + 1}/${total}] Оцінка OSRM для кандидата: Lat ${lat.toFixed(5)}, Lng ${lng.toFixed(5)}...`)
+
             const virtualToilet: Toilet = {
                 id: `opt-${lat}-${lng}`,
                 type: 'public',
@@ -128,13 +186,18 @@ export function useGisAnalytics() {
                 longitude: lng,
                 address: 'Candidate'
             }
+
             const result = await evaluateControlPointsAccessibilityNetwork(
                 DNIPRO_CONTROL_POINTS,
                 [...realToilets, virtualToilet]
             )
+
             results.push(evaluateCandidate(lat, lng, baseline, result))
-            onProgress?.(Math.round(((i + 1) / candidates.length) * 100))
+            onProgress?.(Math.round(((i + 1) / total) * 100))
         }
+
+        console.log(`✅ Протестовано кандидатів з OSRM: ${results.length}`)
+
         return results.sort((a, b) =>
             b.deltaCoverage5 - a.deltaCoverage5 ||
             b.deltaCoverage10 - a.deltaCoverage10 ||
@@ -147,9 +210,13 @@ export function useGisAnalytics() {
     ): Promise<OptimizationSummary | null> => {
         isOptimizing.value = true
         optimizationProgress.value = 0
+        console.group('🚀 [WHAT-IF] Запуск симуляції оптимізації локацій')
 
         try {
-            const candidates = generateCandidateGrid(48.39, 48.54, 34.91, 35.09, 0.02)
+            // Крок 0.008 відповідає приблизно 700-800 метрам між точками сітки (оптимально для швидкої перевірки дефіциту)
+            const candidates = generateCandidateGrid(48.42, 48.52, 34.95, 35.08, 0.008)
+
+            console.log('📡 Розрахунок базового стану доступності (Baseline)...')
             const baseline = await evaluateControlPointsAccessibilityNetwork(
                 DNIPRO_CONTROL_POINTS,
                 realToilets
@@ -177,14 +244,18 @@ export function useGisAnalytics() {
                 topCandidates: top5,
             }
 
+            console.log('🎯 [WHAT-IF] Результати оптимізації готоvisualized! ТОП-5:', top5)
+
             optimizationSummary.value = summary
             saveToStorage(CACHE_KEYS.OPTIMIZATION, summary)
             return summary
         } catch (error) {
-            console.error('Optimization error:', error)
+            console.error('❌ Помилка під час симуляції оптимізації:', error)
             return null
         } finally {
+            console.groupEnd()
             isOptimizing.value = false
+            isOptimizationOutdated.value = false
         }
     }
 
@@ -202,17 +273,32 @@ export function useGisAnalytics() {
         exportGisReportCsv(combined, stats)
     }
 
+    const downloadHtmlReport = (realToilets: Toilet[]) => {
+        const combined = getCombinedToilets(realToilets)
+        const stats = calculateGisStats(combined, bufferRadiusKm.value)
+        exportGisReportHtml(combined, stats)
+    }
+
     const downloadAccessibilityCsvReport = (maxCandidates: number = 3) => {
         if (accessibilityNetworkStats.value) {
             exportAccessibilityResultsCsv(accessibilityNetworkStats.value, maxCandidates)
         }
     }
 
+    const downloadAccessibilityHtmlReport = (maxCandidates: number = 3) => {
+        if (accessibilityNetworkStats.value) {
+            exportAccessibilityReportHtml(accessibilityNetworkStats.value, maxCandidates)
+        }
+    }
+
     const clearGisCache = (clearRoutes: boolean = false) => {
         accessibilityNetworkStats.value = null
         optimizationSummary.value = null
+        virtualToilets.value = []
+
         localStorage.removeItem(CACHE_KEYS.ACCESSIBILITY)
         localStorage.removeItem(CACHE_KEYS.OPTIMIZATION)
+        localStorage.removeItem(CACHE_KEYS.VIRTUAL_TOILETS)
 
         if (clearRoutes) {
             localStorage.removeItem(CACHE_KEYS.OSRM_ROUTES)
@@ -223,6 +309,7 @@ export function useGisAnalytics() {
         isAnalyticsActive,
         isSimulationMode,
         isCalculatingNetwork,
+        networkProgress,
         bufferRadiusKm,
         virtualToilets,
         controlPoints: DNIPRO_CONTROL_POINTS,
@@ -235,12 +322,15 @@ export function useGisAnalytics() {
         recalculateNetworkAccessibility,
         getBuffersGeoJSON,
         isOptimizing,
+        isOptimizationOutdated,
         optimizationProgress,
         optimizationSummary,
         runOptimizationTest,
         runAccessibilityBenchmark,
         getSummaryStats,
         downloadCsvReport,
+        downloadHtmlReport,
         downloadAccessibilityCsvReport,
+        downloadAccessibilityHtmlReport
     }
 }

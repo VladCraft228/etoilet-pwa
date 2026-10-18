@@ -123,13 +123,16 @@ const {
   renderVirtualMarkers,
   clearVirtualMarkers,
   renderControlPointsLayer,
-  clearControlPointsLayer
+  clearControlPointsLayer,
+  renderUncoveredPoints,
+  clearUncoveredPoints
 } = useMap()
 
 const {
   isAnalyticsActive,
   isSimulationMode,
   isCalculatingNetwork,
+  networkProgress,
   bufferRadiusKm,
   virtualToilets,
   controlPoints,
@@ -141,13 +144,16 @@ const {
   recalculateNetworkAccessibility,
   runAccessibilityBenchmark,
   isOptimizing,
+  isOptimizationOutdated,
   runOptimizationTest,
   optimizationProgress,
   optimizationSummary,
   getBuffersGeoJSON,
   getSummaryStats,
   downloadCsvReport,
-  downloadAccessibilityCsvReport
+  downloadHtmlReport,
+  downloadAccessibilityCsvReport,
+  downloadAccessibilityHtmlReport
 } = useGisAnalytics()
 
 const toast = useToast()
@@ -211,11 +217,6 @@ const straightDistanceMeters = computed(() => {
 
 // Реактивна статистика
 const gisStats = computed(() => getSummaryStats(approvedToilets.value))
-
-// Хендлер експорту CSV
-const handleExportCsv = () => {
-  downloadCsvReport(approvedToilets.value)
-}
 
 // Хендлер кліку по мапі
 const handleMapClickForAnalytics = (e: maplibregl.MapMouseEvent) => {
@@ -1537,6 +1538,23 @@ watch(isAdmin, (loggedIn) => {
   }
 })
 
+// Автоматичне оновлення шару дефіциту при зміні статистики
+watch(accessibilityNetworkStats, (newStats) => {
+  if (newStats && isAnalyticsActive.value) {
+    renderUncoveredPoints(newStats)
+  } else {
+    clearUncoveredPoints()
+  }
+})
+
+watch(isAnalyticsActive, (isActive) => {
+  if (!isActive) {
+    clearUncoveredPoints()
+  } else if (accessibilityNetworkStats.value) {
+    renderUncoveredPoints(accessibilityNetworkStats.value)
+  }
+})
+
 // ----------------------------------------------------------
 // TOILETS
 // ----------------------------------------------------------
@@ -2142,18 +2160,24 @@ onUnmounted(() => {
           :stats="gisStats"
           :accessibility-stats="accessibilityNetworkStats"
           :is-loading-network="isCalculatingNetwork"
+          :network-progress="networkProgress"
           :is-simulation-mode="isSimulationMode"
           :virtual-toilets="virtualToilets"
-          @calculate-network="recalculateNetworkAccessibility(approvedToilets)"
           :is-optimizing="isOptimizing"
+          :is-optimization-outdated="isOptimizationOutdated"
           :optimization-progress="optimizationProgress"
           :optimization-summary="optimizationSummary"
+          @calculate-network="recalculateNetworkAccessibility(approvedToilets)"
           @run-optimization="handleRunOptimization"
           @select-candidate="handleSelectCandidate"
           @show-candidate="handleShowBestCandidate"
           @change-radius="handleChangeRadius"
-          @export-csv="handleExportCsv"
+
+          @export-csv="downloadCsvReport(approvedToilets)"
+          @export-html="downloadHtmlReport(approvedToilets)"
           @export-accessibility-csv="downloadAccessibilityCsvReport(3)"
+          @export-accessibility-html="downloadAccessibilityHtmlReport(3)"
+
           @toggle-simulation="isSimulationMode = !isSimulationMode"
           @remove-virtual="removeVirtualToilet"
           @clear-virtual="clearVirtualToilets"

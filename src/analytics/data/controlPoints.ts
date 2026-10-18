@@ -31,7 +31,7 @@ export const DNIPRO_CONTROL_POINTS: ControlPoint[] = [
     { id: 'cp-22', name: 'Парк 40-річчя визволення Дніпра', category: 'park', latitude: 48.42977, longitude: 35.01680 },
     { id: 'cp-23', name: 'Парк імені Володі Дубініна', category: 'park', latitude: 48.42470, longitude: 35.03570 },
     { id: 'cp-24', name: 'Севастопольський парк', category: 'park', latitude: 48.44739, longitude: 35.06029 },
-    { id: 'cp-25', name: 'Новокодацький парк', category: 'park', latitude: 48.48505, longitude: 34.94567 },
+    { id: 'cp-25', name: 'Новокодацький парк', category: 'park', latitude: 48.48716, longitude: 34.94499 },
     { id: 'cp-26', name: 'Парк Шевченка (Оглядовий майданчик)', category: 'park', latitude: 48.46495, longitude: 35.06874 },
     { id: 'cp-27', name: 'Фонтан "Закоханих" (Оглядовий майданчик)', category: 'pedestrian', latitude: 48.48190, longitude: 35.06216 },
     { id: 'cp-28', name: 'Фонтан "Ювілейний" (Оглядовий майданчик)', category: 'pedestrian', latitude: 48.46844, longitude: 35.03097 },

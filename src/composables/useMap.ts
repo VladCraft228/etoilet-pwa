@@ -2,21 +2,24 @@ import { ref, shallowRef } from 'vue'
 import maplibregl from 'maplibre-gl'
 import type { Point } from 'geojson'
 import type { Toilet } from '../types.ts'
+import type { AccessibilitySummary } from '../analytics/utils/accessibility'
 
 export type LatLng = [number, number]
 export type LngLat = [number, number]
 
-// Константи для уникнення magic strings & magic numbers
+// Константи кольорів
 const GREEN_COLOR = '#10b981'
 const BLUE_COLOR = '#2563eb'
 const ORANGE_COLOR = '#f97316'
 const CYAN_COLOR = '#06b6d4'
+const RED_COLOR = '#ef4444' // Яскравий червоний колір для загрози дефіциту
 
 const SOURCE_IDS = {
     toilets: 'toilets',
     buffers: 'analytics-buffers',
     virtual: 'virtual-toilets-source',
-    control: 'control-points-source'
+    control: 'control-points-source',
+    uncovered: 'uncovered-points-source'
 } as const
 
 export function useMap() {
@@ -341,7 +344,10 @@ export function useMap() {
                 id: 'analytics-buffers-fill',
                 type: 'fill',
                 source: SOURCE_IDS.buffers,
-                paint: { 'fill-color': '#6366f1', 'fill-opacity': 0.18 }
+                paint: {
+                    'fill-color': '#6366f1',
+                    'fill-opacity': 0.12  // Легка прозорість буфера, яка не перекриває карту
+                }
             },
             'clusters'
         )
@@ -353,7 +359,7 @@ export function useMap() {
                 source: SOURCE_IDS.buffers,
                 paint: {
                     'line-color': '#4f46e5',
-                    'line-width': 1.5,
+                    'line-width': 1.2,    // Акуратний контур
                     'line-dasharray': [2, 2]
                 }
             },
@@ -456,6 +462,108 @@ export function useMap() {
         if (map.value.getSource(SOURCE_IDS.control)) map.value.removeSource(SOURCE_IDS.control)
     }
 
+    // ==========================================================
+    // РЕНДЕР ТОЧОК ДЕФІЦИТУ (НЕПОКРИТИХ ТОЧОК)
+    // ==========================================================
+    const renderUncoveredPoints = (stats: AccessibilitySummary | null) => {
+        if (!map.value || !stats) return
+
+        const uncovered = stats.results.filter(r => r.analyzed && !r.isAccessible5Min)
+
+        const geojsonData = {
+            type: 'FeatureCollection',
+            features: uncovered.map(r => ({
+                type: 'Feature',
+                geometry: {
+                    type: 'Point',
+                    coordinates: [r.point.longitude, r.point.latitude]
+                },
+                properties: {
+                    id: r.point.id,
+                    name: r.point.name,
+                    category: r.point.category,
+                    timeMin: (r.walkingDurationSeconds / 60).toFixed(1),
+                    distance: r.walkingDistanceMeters
+                }
+            }))
+        }
+
+        const existingSource = map.value.getSource(SOURCE_IDS.uncovered) as maplibregl.GeoJSONSource
+
+        if (existingSource) {
+            existingSource.setData(geojsonData as any)
+            const hasData = uncovered.length > 0
+            if (map.value.getLayer('uncovered-points-halo')) {
+                map.value.setLayoutProperty('uncovered-points-halo', 'visibility', hasData ? 'visible' : 'none')
+            }
+            if (map.value.getLayer('uncovered-points-core')) {
+                map.value.setLayoutProperty('uncovered-points-core', 'visibility', hasData ? 'visible' : 'none')
+            }
+            return
+        }
+
+        map.value.addSource(SOURCE_IDS.uncovered, { type: 'geojson', data: geojsonData as any })
+
+        // 1. Велике яскраво-червоне підсвічування зони дефіциту (Радіус 24px, менша прозорість)
+        map.value.addLayer({
+            id: 'uncovered-points-halo',
+            type: 'circle',
+            source: SOURCE_IDS.uncovered,
+            paint: {
+                'circle-radius': 24,
+                'circle-color': RED_COLOR,
+                'circle-opacity': 0.45,
+                'circle-stroke-width': 1.5,
+                'circle-stroke-color': '#ffffff',
+                'circle-stroke-opacity': 0.8
+            }
+        }, 'control-points-layer')
+
+        // 2. Внутрішнє насичене ядро дефіцитної точки (Радіус 8px)
+        map.value.addLayer({
+            id: 'uncovered-points-core',
+            type: 'circle',
+            source: SOURCE_IDS.uncovered,
+            paint: {
+                'circle-radius': 8,
+                'circle-color': '#dc2626',
+                'circle-stroke-width': 2.5,
+                'circle-stroke-color': '#ffffff'
+            }
+        }, 'control-points-layer')
+
+        // 3. Компактний поп-ап із підказкою при кліку
+        map.value.on('click', 'uncovered-points-core', (e) => {
+            const props = e.features?.[0]?.properties
+            if (!props) return
+
+            new maplibregl.Popup({ offset: 12, closeButton: false })
+                .setLngLat(e.lngLat)
+                .setHTML(`
+                    <div style="padding: 6px 10px; font-family: sans-serif; font-size: 11px; line-height: 1.3;">
+                        <div style="font-weight: 800; color: #dc2626; margin-bottom: 2px;">⚠️ Дефіцитна зона</div>
+                        <div style="font-weight: 600; color: #1e293b;">${props.name}</div>
+                        <div style="color: #64748b; margin-top: 4px;">Час ходу: <b>${props.timeMin} хв</b> (${props.distance} м)</div>
+                    </div>
+                `)
+                .addTo(map.value!)
+        })
+
+        map.value.on('mouseenter', 'uncovered-points-core', () => {
+            if (map.value) map.value.getCanvas().style.cursor = 'pointer'
+        })
+        map.value.on('mouseleave', 'uncovered-points-core', () => {
+            if (map.value) map.value.getCanvas().style.cursor = ''
+        })
+    }
+
+    const clearUncoveredPoints = () => {
+        if (!map.value) return
+        if (map.value.getLayer('uncovered-points-halo')) map.value.removeLayer('uncovered-points-halo')
+        if (map.value.getLayer('uncovered-points-core')) map.value.removeLayer('uncovered-points-core')
+        if (map.value.getSource(SOURCE_IDS.uncovered)) map.value.removeSource(SOURCE_IDS.uncovered)
+    }
+
     return {
         map,
         zoom,
@@ -478,6 +586,8 @@ export function useMap() {
         renderVirtualMarkers,
         clearVirtualMarkers,
         renderControlPointsLayer,
-        clearControlPointsLayer
+        clearControlPointsLayer,
+        renderUncoveredPoints,
+        clearUncoveredPoints
     }
 }
