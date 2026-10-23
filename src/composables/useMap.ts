@@ -19,7 +19,8 @@ const SOURCE_IDS = {
     buffers: 'analytics-buffers',
     virtual: 'virtual-toilets-source',
     control: 'control-points-source',
-    uncovered: 'uncovered-points-source'
+    uncovered: 'uncovered-points-source',
+    routeTrace: 'route-trace-source' // <--- ДОДАНО ДЖЕРЕЛО ДЛЯ ТРАСУВАННЯ МАРШРУТУ
 } as const
 
 export function useMap() {
@@ -28,6 +29,7 @@ export function useMap() {
     const zoom = ref(13)
     const center = ref<LngLat>([35.0461, 48.4647])
     const selectedToiletId = ref<string | null>(null)
+    const currentThreshold = ref<5 | 10>(5)
 
     // ==========================================================
     // COORDINATE HELPERS
@@ -136,10 +138,21 @@ export function useMap() {
             center.value = [c.lng, c.lat]
             zoom.value = mapInstance.getZoom()
         })
+        // 🎯 СХОДЖЕННЯ ЛІНІЇ ТРАСУВАННЯ ПРИ КЛІКУ НА ПУСТУ ОБЛАСТ КАРТИ
+        mapInstance.on('click', (e) => {
+            // Перевіряємо, чи клікнули саме на шар дефіцитних точок чи туалетів
+            const features = mapInstance.queryRenderedFeatures(e.point, {
+                layers: ['uncovered-points-core', 'unclustered-point', 'clusters']
+            })
+            if (features.length === 0) {
+                clearRouteTrace()
+            }
+        })
 
         map.value = mapInstance
         return mapInstance
     }
+
 
     // ==========================================================
     // CAMERA
@@ -172,6 +185,50 @@ export function useMap() {
                 essential: true
             }
         )
+    }
+
+    // ==========================================================
+    // ROUTE TRACE (ТРАСУВАННЯ ЛІНІЇ ДО ВБИРАЛЬНІ)
+    // ==========================================================
+    const renderRouteTrace = (startLngLat: [number, number], endLngLat: [number, number]) => {
+        if (!map.value) return
+
+        const geojsonData = {
+            type: 'Feature',
+            geometry: {
+                type: 'LineString',
+                coordinates: [startLngLat, endLngLat]
+            },
+            properties: {}
+        }
+
+        const existingSource = map.value.getSource(SOURCE_IDS.routeTrace) as maplibregl.GeoJSONSource
+        if (existingSource) {
+            existingSource.setData(geojsonData as any)
+            return
+        }
+
+        map.value.addSource(SOURCE_IDS.routeTrace, {
+            type: 'geojson',
+            data: geojsonData as any
+        })
+
+        map.value.addLayer({
+            id: 'route-trace-line',
+            type: 'line',
+            source: SOURCE_IDS.routeTrace,
+            paint: {
+                'line-color': '#6366f1',
+                'line-width': 3,
+                'line-dasharray': [2, 2]
+            }
+        })
+    }
+
+    const clearRouteTrace = () => {
+        if (!map.value) return
+        if (map.value.getLayer('route-trace-line')) map.value.removeLayer('route-trace-line')
+        if (map.value.getSource(SOURCE_IDS.routeTrace)) map.value.removeSource(SOURCE_IDS.routeTrace)
     }
 
     // ==========================================================
@@ -346,7 +403,7 @@ export function useMap() {
                 source: SOURCE_IDS.buffers,
                 paint: {
                     'fill-color': '#6366f1',
-                    'fill-opacity': 0.12  // Легка прозорість буфера, яка не перекриває карту
+                    'fill-opacity': 0.12
                 }
             },
             'clusters'
@@ -359,7 +416,7 @@ export function useMap() {
                 source: SOURCE_IDS.buffers,
                 paint: {
                     'line-color': '#4f46e5',
-                    'line-width': 1.2,    // Акуратний контур
+                    'line-width': 1.2,
                     'line-dasharray': [2, 2]
                 }
             },
@@ -465,10 +522,15 @@ export function useMap() {
     // ==========================================================
     // РЕНДЕР ТОЧОК ДЕФІЦИТУ (НЕПОКРИТИХ ТОЧОК)
     // ==========================================================
-    const renderUncoveredPoints = (stats: AccessibilitySummary | null) => {
+    const renderUncoveredPoints = (stats: AccessibilitySummary | null, threshold: 5 | 10 = 5) => {
         if (!map.value || !stats) return
+        currentThreshold.value = threshold
 
-        const uncovered = stats.results.filter(r => r.analyzed && !r.isAccessible5Min)
+        // 🎯 Динамічна фільтрація залежно від обраного нормативу (5 або 10 хв)
+        const uncovered = stats.results.filter(r => {
+            if (!r.analyzed) return false
+            return threshold === 5 ? !r.isAccessible5Min : !r.isAccessible10Min
+        })
 
         const geojsonData = {
             type: 'FeatureCollection',
@@ -483,7 +545,9 @@ export function useMap() {
                     name: r.point.name,
                     category: r.point.category,
                     timeMin: (r.walkingDurationSeconds / 60).toFixed(1),
-                    distance: r.walkingDistanceMeters
+                    distance: r.walkingDistanceMeters,
+                    toiletLng: r.nearestToilet?.longitude,
+                    toiletLat: r.nearestToilet?.latitude
                 }
             }))
         }
@@ -504,7 +568,6 @@ export function useMap() {
 
         map.value.addSource(SOURCE_IDS.uncovered, { type: 'geojson', data: geojsonData as any })
 
-        // 1. Велике яскраво-червоне підсвічування зони дефіциту (Радіус 24px, менша прозорість)
         map.value.addLayer({
             id: 'uncovered-points-halo',
             type: 'circle',
@@ -519,7 +582,6 @@ export function useMap() {
             }
         }, 'control-points-layer')
 
-        // 2. Внутрішнє насичене ядро дефіцитної точки (Радіус 8px)
         map.value.addLayer({
             id: 'uncovered-points-core',
             type: 'circle',
@@ -532,20 +594,26 @@ export function useMap() {
             }
         }, 'control-points-layer')
 
-        // 3. Компактний поп-ап із підказкою при кліку
         map.value.on('click', 'uncovered-points-core', (e) => {
-            const props = e.features?.[0]?.properties
-            if (!props) return
+            const feature = e.features?.[0]
+            const props = feature?.properties
+            if (!props || !feature) return
+
+            const ptCoords = (feature.geometry as Point).coordinates as [number, number]
+
+            if (props.toiletLng != null && props.toiletLat != null) {
+                renderRouteTrace(ptCoords, [props.toiletLng, props.toiletLat])
+            }
 
             new maplibregl.Popup({ offset: 12, closeButton: false })
-                .setLngLat(e.lngLat)
+                .setLngLat(ptCoords)
                 .setHTML(`
-                    <div style="padding: 6px 10px; font-family: sans-serif; font-size: 11px; line-height: 1.3;">
-                        <div style="font-weight: 800; color: #dc2626; margin-bottom: 2px;">⚠️ Дефіцитна зона</div>
-                        <div style="font-weight: 600; color: #1e293b;">${props.name}</div>
-                        <div style="color: #64748b; margin-top: 4px;">Час ходу: <b>${props.timeMin} хв</b> (${props.distance} м)</div>
-                    </div>
-                `)
+            <div style="padding: 6px 10px; font-family: sans-serif; font-size: 11px; line-height: 1.3;">
+                <div style="font-weight: 800; color: #dc2626; margin-bottom: 2px;">⚠️ Дефіцитна зона (${currentThreshold.value} хв норматив)</div>
+                <div style="font-weight: 600; color: #1e293b;">${props.name}</div>
+                <div style="color: #64748b; margin-top: 4px;">Час ходу: <b>${props.timeMin} хв</b> (${props.distance} м)</div>
+            </div>
+        `)
                 .addTo(map.value!)
         })
 
@@ -575,6 +643,8 @@ export function useMap() {
         initMap,
         flyToCoords,
         fitRouteBounds,
+        renderRouteTrace,
+        clearRouteTrace,
         lngLatToLatLng,
         latLngToLngLat,
         getMapCenter,

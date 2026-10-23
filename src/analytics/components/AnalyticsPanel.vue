@@ -60,12 +60,17 @@ const emit = defineEmits<{
   (e: 'run-optimization'): void
   (e: 'select-candidate', candidate: OptimizationCandidate, index: number): void
   (e: 'show-candidate', lat: number, lng: number): void
+  (e: 'update:activeThreshold', threshold: 5 | 10): void
+  (e: 'export-optimization-html'): void
+  (e: 'export-optimization-csv'): void
 }>()
 
 const handleRecalculate = () => {
   emit('calculate-network')
   isRadiusChangedSinceLastCalc.value = false
 }
+
+const activeThreshold = ref<5 | 10>(5)
 
 const radiusOptions = [
   { label: '300 м', km: 0.3, time: '~4 хв' },
@@ -152,7 +157,7 @@ const radiusOptions = [
                 type="button"
                 @click="emit('toggle-simulation')"
                 :class="[
-                'px-2 py-0.5 rounded-md text-[10px] font-semibold transition-all cursor-pointer',
+                'px-2 py-2 rounded-md text-[10px] font-semibold transition-all cursor-pointer',
                 isSimulationMode
                   ? 'bg-amber-500 text-white shadow-sm shadow-amber-500/30 animate-pulse'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -248,6 +253,23 @@ const radiusOptions = [
             </div>
           </div>
 
+          <div class="grid grid-cols-2 gap-1.5 bg-slate-100 p-1 rounded-xl">
+            <button
+                type="button"
+                @click="activeThreshold = 5; emit('update:activeThreshold', 5)"
+                :class="activeThreshold === 5 ? 'bg-white shadow-sm text-indigo-600 font-bold' : 'text-slate-600 hover:bg-slate-200/60'"
+                class="py-2 text-xs rounded-lg transition-all cursor-pointer flex items-center justify-center">
+              Норматив 5 хв
+            </button>
+            <button
+                type="button"
+                @click="activeThreshold = 10; emit('update:activeThreshold', 10)"
+                :class="activeThreshold === 10 ? 'bg-white shadow-sm text-indigo-600 font-bold' : 'text-slate-600 hover:bg-slate-200/60'"
+                class="py-2 text-xs rounded-lg transition-all cursor-pointer flex items-center justify-center">
+              Норматив 10 хв
+            </button>
+          </div>
+
           <div v-if="categoryStats && categoryStats.length > 0" class="pt-1">
             <div class="text-[9px] font-bold text-slate-400 uppercase mb-1">За категоріями</div>
             <div class="overflow-x-auto rounded border border-slate-200 bg-white">
@@ -256,6 +278,7 @@ const radiusOptions = [
                 <tr>
                   <th class="p-1 text-left">Кат.</th>
                   <th class="p-1 text-center">5 хв</th>
+                  <th class="p-1 text-center">10 хв</th>
                   <th class="p-1 text-right">CF</th>
                 </tr>
                 </thead>
@@ -263,6 +286,7 @@ const radiusOptions = [
                 <tr v-for="stat in categoryStats" :key="stat.category" class="border-t border-slate-100">
                   <td class="p-1 font-medium text-slate-700">{{ stat.category }}</td>
                   <td class="p-1 text-center text-indigo-600 font-bold">{{ Math.round(stat.coverage5) }}%</td>
+                  <td class="p-1 text-center text-amber-600 font-semibold">{{ Math.round(stat.coverage10) }}%</td>
                   <td class="p-1 text-right text-slate-600">{{ stat.avgCircuity.toFixed(2) }}</td>
                 </tr>
                 </tbody>
@@ -411,6 +435,22 @@ const radiusOptions = [
                 </tr>
                 </tbody>
               </table>
+            </div>
+            <div class="flex gap-1.5">
+              <button
+                  type="button"
+                  @click="emit('export-optimization-csv')"
+                  class="flex-1 flex items-center justify-center gap-1 py-1 bg-white hover:bg-amber-100/60 border border-amber-200 text-amber-900 rounded-lg text-[10px] font-semibold transition-colors cursor-pointer"
+              >
+                <span class="material-symbols-outlined text-[13px]">table_view</span> CSV
+              </button>
+              <button
+                  type="button"
+                  @click="emit('export-optimization-html')"
+                  class="flex-1 flex items-center justify-center gap-1 py-1 bg-amber-100/70 hover:bg-amber-200/70 border border-amber-200 text-amber-900 rounded-lg text-[10px] font-semibold transition-colors cursor-pointer"
+              >
+                <span class="material-symbols-outlined text-[13px]">description</span> HTML звіт
+              </button>
             </div>
           </div>
         </template>

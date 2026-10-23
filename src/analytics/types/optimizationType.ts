@@ -11,8 +11,20 @@ export interface OptimizationCandidate {
     improvedPoints: number
 }
 
+export interface OptimizationParams {
+    gridStepDegrees: number
+    bounds: { minLatitude: number; maxLatitude: number; minLongitude: number; maxLongitude: number }
+    maxSnapDistanceMeters: number
+    minDistanceToExistingMeters: number
+}
+
 export interface OptimizationSummary {
     totalCandidates: number
+    /** Скільки кандидатів дійшло до OSRM-оцінки (після фільтрів води/дублікатів/близькості). */
+    evaluatedCandidates?: number
+    /** ISO-дата запуску симуляції. */
+    generatedAt?: string
+    params?: OptimizationParams
     baseline: {
         coverage5: number
         coverage10: number

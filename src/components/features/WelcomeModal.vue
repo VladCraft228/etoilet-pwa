@@ -45,34 +45,52 @@ const handleClose = () => {
             <span class="material-symbols-outlined text-[16px]">wc</span>
           </div>
           <p class="text-xs font-medium leading-tight">
-            <span class="font-bold text-slate-800">Сині та зелені маркери</span> — клікайте на них на мапі, щоб побачити ціну, години роботи, стан замка, наявність рукомийника чи фото.
-          </p>
-        </div>
-
-        <div class="flex gap-3 items-start">
-          <div class="flex items-center justify-center bg-white border border-slate-200 text-slate-700 rounded-full p-1.5 shadow-sm shrink-0">
-            <span class="material-symbols-outlined text-[16px]">my_location</span>
-          </div>
-          <p class="text-xs font-medium leading-tight">
-            <span class="font-bold text-slate-800">Кнопка "Де я"</span> — визначає ваше поточне GPS-розташування на мапі для швидкої навігації.
+            <span class="font-bold text-slate-800">Сині та зелені маркери</span> — громадські вбиральні та біотуалети. Натисніть на маркер, щоб побачити ціну, години роботи, стан замка, наявність рукомийника чи фото.
           </p>
         </div>
 
         <div class="flex gap-3 items-start">
           <div class="flex items-center justify-center bg-indigo-600 text-white rounded-full p-1.5 shadow-sm shrink-0">
-            <span class="material-symbols-outlined text-[16px]">add</span>
+            <span class="material-symbols-outlined text-[16px]">near_me</span>
           </div>
           <p class="text-xs font-medium leading-tight">
-            <span class="font-bold text-slate-800">Кнопка "Додати"</span> — активує режим прицілу. Перетягніть мапу під маркер, щоб надіслати нову точку на модерацію.
+            <span class="font-bold text-slate-800">Кнопка «Знайти найближчу вбиральню»</span> — велика кнопка по центру: знаходить найближчу до вас вбиральню та показує її на мапі.
           </p>
         </div>
 
         <div class="flex gap-3 items-start">
-          <div class="flex items-center justify-center bg-white border border-slate-200 text-slate-500 rounded-full p-1.5 shadow-sm shrink-0">
-            <span class="material-symbols-outlined text-[16px]">search</span>
+          <div class="flex items-center justify-center bg-white border border-slate-200 text-indigo-600 rounded-full p-1.5 shadow-sm shrink-0">
+            <span class="material-symbols-outlined text-[16px]">my_location</span>
           </div>
           <p class="text-xs font-medium leading-tight">
-            <span class="font-bold text-slate-800">Пошук адреси</span> — дозволяє миттєво переміститися у потрібну точку міста за назвою вулиці.
+            <span class="font-bold text-slate-800">Кнопка «Моя геолокація»</span> — показує ваше поточне GPS-розташування на мапі.
+          </p>
+        </div>
+
+        <div class="flex gap-3 items-start">
+          <div class="flex items-center justify-center bg-white border border-slate-200 text-slate-700 rounded-full p-1.5 shadow-sm shrink-0">
+            <span class="material-symbols-outlined text-[16px]">add_location_alt</span>
+          </div>
+          <p class="text-xs font-medium leading-tight">
+            <span class="font-bold text-slate-800">Кнопка «Запропонувати вбиральню»</span> — вмикає режим прицілу: перетягніть мапу під маркер (або скористайтесь «Я тут» чи «Пошук адреси») і надішліть нову точку на модерацію.
+          </p>
+        </div>
+
+        <div class="flex gap-3 items-start">
+          <div class="flex items-center justify-center bg-rose-600 text-white rounded-full p-1.5 shadow-sm shrink-0">
+            <span class="material-symbols-outlined text-[16px]">report_problem</span>
+          </div>
+          <p class="text-xs font-medium leading-tight">
+            <span class="font-bold text-slate-800">Кнопка «Повідомити про проблему»</span> — у картці вбиральні: напишіть, якщо точка не працює, зламаний замок або дані застаріли.
+          </p>
+        </div>
+
+        <div class="flex gap-3 items-start">
+          <div class="flex items-center justify-center bg-white border border-slate-200 text-slate-700 rounded-full p-1.5 shadow-sm shrink-0">
+            <span class="material-symbols-outlined text-[16px]">explore</span>
+          </div>
+          <p class="text-xs font-medium leading-tight">
+            <span class="font-bold text-slate-800">Компас та «+» / «−»</span> — компас повертає мапу на північ, а кнопки справа наближають і віддаляють мапу.
           </p>
         </div>
       </div>

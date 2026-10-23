@@ -160,7 +160,7 @@ const title = computed(() =>
     <span class="block text-[10px] font-bold uppercase tracking-wider text-amber-700/80">
       Як знайти / Орієнтир
     </span>
-          <p class="text-[12px] text-slate-700 font-medium leading-snug line-clamp-2 break-words mt-0.5">
+          <p class="text-[12px] text-slate-700 font-medium leading-snug break-words mt-0.5 max-h-16 overflow-y-auto custom-scrollbar">
             {{ toilet.location_hint }}
           </p>
         </div>

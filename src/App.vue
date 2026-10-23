@@ -153,7 +153,9 @@ const {
   downloadCsvReport,
   downloadHtmlReport,
   downloadAccessibilityCsvReport,
-  downloadAccessibilityHtmlReport
+  downloadAccessibilityHtmlReport,
+  downloadOptimizationHtmlReport,
+  downloadOptimizationCsvReport
 } = useGisAnalytics()
 
 const toast = useToast()
@@ -370,6 +372,9 @@ let pendingReviewMarker:
 
 const activeToiletForPopup =
     ref<Toilet | null>(null)
+
+const activeAccessibilityThreshold =
+    ref<5 | 10>(5)
 
 // ==========================================================
 // RESPONSIVE
@@ -1539,9 +1544,9 @@ watch(isAdmin, (loggedIn) => {
 })
 
 // Автоматичне оновлення шару дефіциту при зміні статистики
-watch(accessibilityNetworkStats, (newStats) => {
+watch([accessibilityNetworkStats, activeAccessibilityThreshold], ([newStats]) => {
   if (newStats && isAnalyticsActive.value) {
-    renderUncoveredPoints(newStats)
+    renderUncoveredPoints(newStats, activeAccessibilityThreshold.value)
   } else {
     clearUncoveredPoints()
   }
@@ -2177,7 +2182,10 @@ onUnmounted(() => {
           @export-html="downloadHtmlReport(approvedToilets)"
           @export-accessibility-csv="downloadAccessibilityCsvReport(3)"
           @export-accessibility-html="downloadAccessibilityHtmlReport(3)"
+          @export-optimization-csv="downloadOptimizationCsvReport(approvedToilets)"
+          @export-optimization-html="downloadOptimizationHtmlReport(approvedToilets)"
 
+          v-model:active-threshold="activeAccessibilityThreshold"
           @toggle-simulation="isSimulationMode = !isSimulationMode"
           @remove-virtual="removeVirtualToilet"
           @clear-virtual="clearVirtualToilets"

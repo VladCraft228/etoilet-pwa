@@ -240,8 +240,6 @@ export async function evaluateControlPointsAccessibilityNetwork(
             const nearestCandidate = candidates[0]
             const straightDistance = Math.round(nearestCandidate.dist)
 
-            // 🎯 1. ПІДСТРАХОВКА ПРЯМОЇ ВИДИМОСТІ (Straight-line Fallback)
-            // Для великих площ, набережних і парків (до 180м) вважаємо об'єкт доступним без OSRM-обходів
             if (straightDistance <= STRAIGHT_LINE_THRESHOLD_METERS) {
                 const walkingDuration = Math.round(straightDistance / WALKING_SPEED_MPS)
                 result = {
@@ -250,13 +248,12 @@ export async function evaluateControlPointsAccessibilityNetwork(
                     straightDistanceMeters: straightDistance,
                     walkingDistanceMeters: straightDistance,
                     walkingDurationSeconds: walkingDuration,
-                    circuityFactor: 1.0, // Ідеальний прямий шлях
+                    circuityFactor: 1.0,
                     isAccessible5Min: true,
                     isAccessible10Min: true,
                     analyzed: true,
                 }
             } else {
-                // 2. Звичайний OSRM розрахунок по графу для віддалених об'єктів
                 let bestResult: {
                     candidate: typeof candidates[0],
                     route: { distanceMeters: number; durationSeconds: number }
@@ -297,11 +294,13 @@ export async function evaluateControlPointsAccessibilityNetwork(
                         ? Number((walkingDistance / straightDistance).toFixed(2))
                         : 1
 
-                    // 🎯 3. ФІЛЬТР АНОМАЛЬНИХ ГАКІВ OSRM (Graph Gap Detection)
-                    // Якщо OSRM будує маршрут з CF > 2.0 (понад +100% обходу), але пряма відстань <= 250м,
-                    // це топологічний розрив стежки в OSM (наприклад, причал або паркова зона).
+                    if (walkingDistance > straightDistance * 3 || walkingDistance > 1000) {
+                        walkingDistance = Math.round(straightDistance * 1.3)
+                        walkingDuration = Math.round(walkingDistance / WALKING_SPEED_MPS)
+                        circuityFactor = 1.3
+                    }
+
                     if (circuityFactor > 2.0 && straightDistance <= 250) {
-                        // Застосовуємо реалістичний коефіцієнт пішохідного обходу в рекреаційній зоні (1.25)
                         const correctedDistance = Math.round(straightDistance * 1.25)
                         const correctedDuration = Math.round(correctedDistance / WALKING_SPEED_MPS)
 
@@ -408,249 +407,6 @@ function calculateSummary(totalPoints: number, results: ControlPointAnalysisResu
         medianWalkingTimeMins: safeRound(median(walkingTimes) / 60),
         avgCircuityFactor: Number(safeAvg(circuityFactors).toFixed(2)),
         medianCircuityFactor: Number(median(circuityFactors).toFixed(2)),
-        results,
+        results
     }
-}
-
-// ==========================================================
-// EXPORT FUNCTIONS
-// ==========================================================
-
-export function exportAccessibilityResultsCsv(
-    summary: AccessibilitySummary,
-    maxCandidates: number = 3
-) {
-    let csv = '\uFEFF'
-
-    csv += [
-        'ID', 'Назва', 'Категорія', 'Широта', 'Довгота',
-        'Найближча вбиральня', 'Евклідова відстань (м)',
-        'Пішохідна відстань (м)', 'Час (с)', 'Час (хв)',
-        'Circuity Factor', 'Доступно 5 хв', 'Доступно 10 хв', 'Статус'
-    ].join(';') + '\n'
-
-    for (const result of summary.results) {
-        const point = result.point
-        const toiletName = result.nearestToilet?.address ?? result.nearestToilet?.id ?? 'N/A'
-        const walkingTimeMin = (result.walkingDurationSeconds / 60).toFixed(1)
-
-        const safeName = `"${point.name.replace(/"/g, '""')}"`
-        const safeToilet = `"${String(toiletName).replace(/"/g, '""')}"`
-
-        csv += [
-            point.id,
-            safeName,
-            point.category,
-            point.latitude,
-            point.longitude,
-            safeToilet,
-            result.straightDistanceMeters,
-            result.walkingDistanceMeters,
-            result.walkingDurationSeconds,
-            walkingTimeMin,
-            result.circuityFactor,
-            result.isAccessible5Min ? 'Так' : 'Ні',
-            result.isAccessible10Min ? 'Так' : 'Ні',
-            result.analyzed ? 'OK' : 'FAIL'
-        ].join(';') + '\n'
-    }
-
-    csv += '\n'
-    csv += `ПАРАМЕТРИ АНАЛІЗУ;\n`
-    csv += `MAX_CANDIDATES;${maxCandidates}\n`
-    csv += `Всього точок;${summary.totalControlPoints}\n`
-    csv += `Успішно проаналізовано;${summary.analyzedControlPoints}\n`
-    csv += `Помилки;${summary.failedControlPoints}\n`
-    csv += `Покриття 5 хв;${summary.accessible5MinPercent}%\n`
-    csv += `Покриття 10 хв;${summary.accessible10MinPercent}%\n`
-    csv += `Середній час ходу;${summary.avgWalkingTimeMins} хв\n`
-    csv += `Медіанний час ходу;${summary.medianWalkingTimeMins} хв\n`
-
-    downloadFile(csv, `accessibility_report_${new Date().toISOString().slice(0,10)}.csv`, 'text/csv;charset=utf-8;')
-}
-
-export function exportAccessibilityReportHtml(
-    summary: AccessibilitySummary,
-    maxCandidates: number = 3
-) {
-    const dateStr = new Date().toLocaleDateString('uk-UA')
-
-    const generateRows = () => {
-        return summary.results.map(r => {
-            let statusBgClass = 'bg-gray-100 text-gray-800'
-            let statusText = 'N/A'
-
-            if (!r.analyzed) {
-                statusBgClass = 'bg-red-100 text-red-800 border border-red-200'
-                statusText = 'Помилка'
-            } else if (r.isAccessible5Min) {
-                statusBgClass = 'bg-green-100 text-green-800 border border-green-200'
-                statusText = 'Так (< 5 хв)'
-            } else if (r.isAccessible10Min) {
-                statusBgClass = 'bg-yellow-100 text-yellow-800 border border-yellow-200'
-                statusText = 'Так (< 10 хв)'
-            } else {
-                statusBgClass = 'bg-orange-100 text-orange-800 border border-orange-200'
-                statusText = 'Ні (> 10 хв)'
-            }
-
-            return `
-            <tr class="hover:bg-gray-50 transition-colors duration-150">
-                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${r.point.id}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 max-w-xs truncate" title="${r.point.name}">${r.point.name}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 max-w-xs truncate" title="${r.nearestToilet?.address || ''}">${r.nearestToilet?.address || '—'}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-right font-mono">${r.straightDistanceMeters}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-semibold text-right font-mono">${r.walkingDistanceMeters}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-mono">${(r.walkingDurationSeconds / 60).toFixed(1)}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-right font-mono">${r.circuityFactor}</td>
-                <td class="px-6 py-4 whitespace-nowrap">
-                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusBgClass}">
-                        ${statusText}
-                    </span>
-                </td>
-            </tr>`;
-        }).join('');
-    };
-
-    const successRate = summary.totalControlPoints > 0
-        ? Math.round((summary.analyzedControlPoints / summary.totalControlPoints) * 100)
-        : 0;
-
-    const html = `
-    <!DOCTYPE html>
-    <html lang="uk">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Звіт доступності вбиральнь</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <style>
-            @media print {
-                body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-                .no-print { display: none; }
-            }
-        </style>
-    </head>
-    <body class="bg-slate-50 text-slate-800 font-sans antialiased">
-        <div class="max-w-7xl mx-auto p-6 sm:p-10">
-            <header class="mb-10 border-b border-slate-200 pb-6">
-                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div>
-                        <h1 class="text-3xl font-bold text-slate-900 tracking-tight">🚽 Аналіз доступності міських вбиральнь</h1>
-                        <p class="text-slate-500 mt-2">Звіт сформовано: <span class="font-medium text-slate-700">${dateStr}</span></p>
-                    </div>
-                    <div class="flex items-center gap-3 no-print">
-                        <button onclick="window.print()" class="inline-flex items-center px-4 py-2 bg-white border border-slate-300 rounded-md shadow-sm text-sm font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                            🖨️ Друк / PDF
-                        </button>
-                    </div>
-                </div>
-            </header>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
-                <div class="bg-white overflow-hidden shadow rounded-lg border-l-4 border-indigo-500">
-                    <div class="px-4 py-5 sm:p-6">
-                        <dt class="text-sm font-medium text-slate-500 truncate uppercase tracking-wide">Покриття 5 хв</dt>
-                        <dd class="mt-1 text-3xl font-semibold text-indigo-600">${summary.accessible5MinPercent}%</dd>
-                        <p class="mt-2 text-sm text-slate-400">${summary.accessible5MinCount} з ${summary.totalControlPoints} точок</p>
-                    </div>
-                </div>
-
-                <div class="bg-white overflow-hidden shadow rounded-lg border-l-4 border-emerald-500">
-                    <div class="px-4 py-5 sm:p-6">
-                        <dt class="text-sm font-medium text-slate-500 truncate uppercase tracking-wide">Середній час ходу</dt>
-                        <dd class="mt-1 text-3xl font-semibold text-emerald-600">${summary.avgWalkingTimeMins} хв</dd>
-                        <p class="mt-2 text-sm text-slate-400">Медіана: ${summary.medianWalkingTimeMins} хв</p>
-                    </div>
-                </div>
-
-                <div class="bg-white overflow-hidden shadow rounded-lg border-l-4 border-blue-500">
-                    <div class="px-4 py-5 sm:p-6">
-                        <dt class="text-sm font-medium text-slate-500 truncate uppercase tracking-wide">Успішність розрахунку</dt>
-                        <dd class="mt-1 text-3xl font-semibold text-blue-600">${successRate}%</dd>
-                        <div class="w-full bg-slate-200 rounded-full h-1.5 mt-3">
-                            <div class="bg-blue-500 h-1.5 rounded-full" style="width: ${successRate}%"></div>
-                        </div>
-                        <p class="mt-2 text-xs text-slate-400 text-right">${summary.failedControlPoints} помилок</p>
-                    </div>
-                </div>
-
-                <div class="bg-white overflow-hidden shadow rounded-lg border-l-4 border-amber-500">
-                    <div class="px-4 py-5 sm:p-6">
-                        <dt class="text-sm font-medium text-slate-500 truncate uppercase tracking-wide">Circuity Factor</dt>
-                        <dd class="mt-1 text-3xl font-semibold text-amber-600">${summary.avgCircuityFactor}</dd>
-                        <p class="mt-2 text-sm text-slate-400">Середнє відхилення маршруту</p>
-                    </div>
-                </div>
-            </div>
-
-            <div class="bg-white shadow-lg rounded-lg overflow-hidden border border-slate-200">
-                <div class="px-6 py-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
-                    <h2 class="text-lg font-medium text-slate-800">Детальні результати по контрольних точках</h2>
-                    <span class="text-xs font-medium px-2 py-1 bg-slate-200 text-slate-600 rounded">Кандидатів: ${maxCandidates}</span>
-                </div>
-                
-                <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y divide-slate-200">
-                        <thead class="bg-slate-100">
-                            <tr>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">ID</th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Локація</th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Найближча вбиральня</th>
-                                <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Пряма (м)</th>
-                                <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Маршрут (м)</th>
-                                <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Час (хв)</th>
-                                <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">CF</th>
-                                <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-slate-500 uppercase tracking-wider">Статус (5 хв)</th>
-                            </tr>
-                        </thead>
-                        <tbody class="bg-white divide-y divide-slate-200">
-                            ${generateRows()}
-                        </tbody>
-                    </table>
-                </div>
-                
-                ${summary.results.length === 0 ? '<div class="p-10 text-center text-slate-500">Немає даних для відображення</div>' : ''}
-            </div>
-
-            <footer class="mt-10 pt-6 border-t border-slate-200 text-sm text-slate-500">
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    <div>
-                        <h3 class="font-semibold text-slate-700 mb-2">Легенда:</h3>
-                        <ul class="space-y-2">
-                            <li class="flex items-center"><span class="w-3 h-3 rounded-full bg-green-100 border border-green-200 mr-2"></span> Доступно пішки ≤ 5 хв</li>
-                            <li class="flex items-center"><span class="w-3 h-3 rounded-full bg-yellow-100 border border-yellow-200 mr-2"></span> Доступно пішки ≤ 10 хв</li>
-                            <li class="flex items-center"><span class="w-3 h-3 rounded-full bg-orange-100 border border-orange-200 mr-2"></span> Більше 10 хв ходьби</li>
-                            <li class="flex items-center"><span class="w-3 h-3 rounded-full bg-red-100 border border-red-200 mr-2"></span> Помилка маршрутизації</li>
-                        </ul>
-                    </div>
-                    <div>
-                        <h3 class="font-semibold text-slate-700 mb-2">Примітки:</h3>
-                        <p class="mb-2"><strong>CF (Circuity Factor):</strong> Відношення довжини пішохідного маршруту до прямої відстані. Чим ближче до 1.0, тим пряміший шлях.</p>
-                        <p>Маршрутизація виконана через OSRM (профіль пішохода).</p>
-                        <p class="mt-2 text-xs italic">* Для точок у межах прямої видимості (≤ 80 м) чи де OSRM не зміг прокласти маршрут (парки, набережні), використано евклідову відстань.</p>
-                    </div>
-                </div>
-            </footer>
-        </div>
-    </body>
-    </html>`;
-
-    downloadFile(html, `accessibility_report_${new Date().toISOString().slice(0,10)}.html`, 'text/html;charset=utf-8;')
-}
-
-function downloadFile(content: string, filename: string, mimeType: string) {
-    const blob = new Blob([content], { type: mimeType })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = filename
-    link.style.display = 'none'
-    document.body.appendChild(link)
-    link.click()
-
-    setTimeout(() => {
-        document.body.removeChild(link)
-        URL.revokeObjectURL(url)
-    }, 100)
 }

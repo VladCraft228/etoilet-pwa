@@ -6,12 +6,18 @@ import { calculateGisStats, exportGisReportCsv, exportGisReportHtml } from '../u
 import { DNIPRO_CONTROL_POINTS } from '../data/controlPoints'
 import {
     type AccessibilitySummary,
-    evaluateControlPointsAccessibilityNetwork,
-    exportAccessibilityResultsCsv,
-    exportAccessibilityReportHtml
+    evaluateControlPointsAccessibilityNetwork
 } from '../utils/accessibility'
+import { exportAccessibilityResultsCsv, exportAccessibilityReportHtml } from '../utils/accessibilityReport'
+import { exportOptimizationReportHtml, exportOptimizationReportCsv } from '../utils/optimizationReport'
 import { runCandidateBenchmark } from '../utils/accessibilityBenchmark'
-import { evaluateCandidate, generateCandidateGrid } from '../utils/optimization'
+import {
+    evaluateCandidate,
+    generateCandidateGrid,
+    snapToWalkableNetwork,
+    MAX_SNAP_DISTANCE_METERS,
+    MIN_DISTANCE_TO_EXISTING_METERS
+} from '../utils/optimization'
 import type { OptimizationCandidate, OptimizationSummary } from '../types/optimizationType'
 
 // ==========================================
@@ -144,6 +150,7 @@ export function useGisAnalytics() {
         onProgress?: (p: number) => void
     ): Promise<OptimizationCandidate[]> => {
         const results: OptimizationCandidate[] = []
+        const seenSnapped = new Set<string>()
         const total = candidates.length
 
         // Отримуємо список контрольних точок, які ще НЕ мали 5-хв або 10-хв доступності
@@ -176,14 +183,46 @@ export function useGisAnalytics() {
                 continue
             }
 
-            console.log(`⏳ [${i + 1}/${total}] Оцінка OSRM для кандидата: Lat ${lat.toFixed(5)}, Lng ${lng.toFixed(5)}...`)
+            // ФІЛЬТР СУШІ: прив'язуємо вузол сітки до пішохідної мережі.
+            // Якщо найближча дорога далі за 40 м (Дніпро, затоки) — кандидата відкидаємо.
+            const snapped = await snapToWalkableNetwork(lat, lng)
+            if (!snapped) {
+                console.log(`🌊 [${i + 1}/${total}] Кандидат [${lat.toFixed(4)}, ${lng.toFixed(4)}] відкинуто (поза пішохідною мережею, ймовірно вода).`)
+                onProgress?.(Math.round(((i + 1) / total) * 100))
+                continue
+            }
+
+            // Дублікати після прив'язки (кілька вузлів сітки → одна й та сама дорога)
+            const snapKey = `${snapped.latitude.toFixed(5)},${snapped.longitude.toFixed(5)}`
+            if (seenSnapped.has(snapKey)) {
+                onProgress?.(Math.round(((i + 1) / total) * 100))
+                continue
+            }
+            seenSnapped.add(snapKey)
+
+            // Занадто близько до наявної вбиральні — нового покриття не дасть
+            const snappedPoint = turf.point([snapped.longitude, snapped.latitude])
+            const tooCloseToExisting = realToilets.some(
+                (t) =>
+                    t.latitude != null &&
+                    t.longitude != null &&
+                    turf.distance(snappedPoint, turf.point([t.longitude, t.latitude]), { units: 'meters' }) <
+                    MIN_DISTANCE_TO_EXISTING_METERS
+            )
+            if (tooCloseToExisting) {
+                onProgress?.(Math.round(((i + 1) / total) * 100))
+                continue
+            }
+
+            const { latitude: candLat, longitude: candLng } = snapped
+            console.log(`⏳ [${i + 1}/${total}] Оцінка OSRM для кандидата: Lat ${candLat.toFixed(5)}, Lng ${candLng.toFixed(5)}...`)
 
             const virtualToilet: Toilet = {
-                id: `opt-${lat}-${lng}`,
+                id: `opt-${candLat}-${candLng}`,
                 type: 'public',
                 status: 'virtual',
-                latitude: lat,
-                longitude: lng,
+                latitude: candLat,
+                longitude: candLng,
                 address: 'Candidate'
             }
 
@@ -192,7 +231,7 @@ export function useGisAnalytics() {
                 [...realToilets, virtualToilet]
             )
 
-            results.push(evaluateCandidate(lat, lng, baseline, result))
+            results.push(evaluateCandidate(candLat, candLng, baseline, result))
             onProgress?.(Math.round(((i + 1) / total) * 100))
         }
 
@@ -214,7 +253,11 @@ export function useGisAnalytics() {
 
         try {
             // Крок 0.008 відповідає приблизно 700-800 метрам між точками сітки (оптимально для швидкої перевірки дефіциту)
-            const candidates = generateCandidateGrid(48.42, 48.52, 34.95, 35.08, 0.008)
+            const GRID_STEP = 0.008
+            const BOUNDS = { minLatitude: 48.42, maxLatitude: 48.52, minLongitude: 34.95, maxLongitude: 35.08 }
+            const candidates = generateCandidateGrid(
+                BOUNDS.minLatitude, BOUNDS.maxLatitude, BOUNDS.minLongitude, BOUNDS.maxLongitude, GRID_STEP
+            )
 
             console.log('📡 Розрахунок базового стану доступності (Baseline)...')
             const baseline = await evaluateControlPointsAccessibilityNetwork(
@@ -235,6 +278,14 @@ export function useGisAnalytics() {
 
             const summary: OptimizationSummary = {
                 totalCandidates: candidates.length,
+                evaluatedCandidates: results.length,
+                generatedAt: new Date().toISOString(),
+                params: {
+                    gridStepDegrees: GRID_STEP,
+                    bounds: BOUNDS,
+                    maxSnapDistanceMeters: MAX_SNAP_DISTANCE_METERS,
+                    minDistanceToExistingMeters: MIN_DISTANCE_TO_EXISTING_METERS,
+                },
                 baseline: {
                     coverage5: baseline.accessible5MinPercent,
                     coverage10: baseline.accessible10MinPercent,
@@ -291,6 +342,22 @@ export function useGisAnalytics() {
         }
     }
 
+    const downloadOptimizationHtmlReport = (realToilets: Toilet[]) => {
+        if (optimizationSummary.value) {
+            exportOptimizationReportHtml(
+                optimizationSummary.value,
+                getCombinedToilets(realToilets),
+                accessibilityNetworkStats.value
+            )
+        }
+    }
+
+    const downloadOptimizationCsvReport = (realToilets: Toilet[]) => {
+        if (optimizationSummary.value) {
+            exportOptimizationReportCsv(optimizationSummary.value, getCombinedToilets(realToilets))
+        }
+    }
+
     const clearGisCache = (clearRoutes: boolean = false) => {
         accessibilityNetworkStats.value = null
         optimizationSummary.value = null
@@ -331,6 +398,8 @@ export function useGisAnalytics() {
         downloadCsvReport,
         downloadHtmlReport,
         downloadAccessibilityCsvReport,
-        downloadAccessibilityHtmlReport
+        downloadAccessibilityHtmlReport,
+        downloadOptimizationHtmlReport,
+        downloadOptimizationCsvReport
     }
 }
