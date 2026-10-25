@@ -1,6 +1,6 @@
 import type { Toilet } from '../../types'
 import type { ControlPoint } from '../data/controlPoints'
-import type { AccessibilitySummary, ControlPointAnalysisResult } from './accessibility'
+import type { AccessibilitySummary, ControlPointAnalysisResult, RouteSource } from './accessibility'
 import { calculateCategoryAccessibilityStats } from './categoryStats'
 import { downloadFile, escapeHtml } from './download'
 import {
@@ -29,6 +29,15 @@ const CATEGORY_LABELS: Record<ControlPoint['category'], string> = {
 
 const categoryLabel = (c: ControlPoint['category']) => CATEGORY_LABELS[c] ?? c
 
+const ROUTE_SOURCE_LABELS: Record<RouteSource, string> = {
+    direct: 'Пряма',
+    osrm: 'OSRM',
+    fallback: 'Fallback',
+    correction: 'Корекція',
+}
+
+const localFilenameDate = () => new Date().toLocaleDateString('sv-SE')
+
 /** Читабельна назва вбиральні: адреса або «Тип · короткий id». */
 function toiletLabel(toilet: Toilet): string {
     if (toilet.address) return toilet.address
@@ -50,7 +59,7 @@ export function exportAccessibilityResultsCsv(
         'ID', 'Назва', 'Категорія', 'Широта', 'Довгота',
         'Найближча вбиральня', 'Евклідова відстань (м)',
         'Пішохідна відстань (м)', 'Час (с)', 'Час (хв)',
-        'Circuity Factor', 'Доступно 5 хв', 'Доступно 10 хв', 'Статус'
+        'Circuity Factor', 'Джерело маршруту', 'Доступно 5 хв', 'Доступно 10 хв', 'Статус'
     ].join(';') + '\n'
 
     for (const result of summary.results) {
@@ -73,6 +82,7 @@ export function exportAccessibilityResultsCsv(
             result.walkingDurationSeconds,
             walkingTimeMin,
             result.circuityFactor,
+            ROUTE_SOURCE_LABELS[result.routeSource],
             result.isAccessible5Min ? 'Так' : 'Ні',
             result.isAccessible10Min ? 'Так' : 'Ні',
             result.analyzed ? 'OK' : 'FAIL'
@@ -90,7 +100,7 @@ export function exportAccessibilityResultsCsv(
     csv += `Середній час ходу;${summary.avgWalkingTimeMins} хв\n`
     csv += `Медіанний час ходу;${summary.medianWalkingTimeMins} хв\n`
 
-    downloadFile(csv, `accessibility_report_${new Date().toISOString().slice(0,10)}.csv`, 'text/csv;charset=utf-8;')
+    downloadFile(csv, `accessibility_report_${localFilenameDate()}.csv`, 'text/csv;charset=utf-8;')
 }
 
 // ==========================================================
@@ -158,20 +168,68 @@ function renderZoneTable(rows: ControlPointAnalysisResult[]): string {
                 </div>`
 }
 
+function renderEuclideanVsNetworkTable(rows: ControlPointAnalysisResult[]): string {
+    if (rows.length === 0) return ''
+
+    const body = rows
+        .slice()
+        .sort((a, b) => b.walkingDistanceMeters - a.walkingDistanceMeters)
+        .map((r) => {
+            const delta = r.walkingDistanceMeters - r.straightDistanceMeters
+            const deltaLabel = `${delta >= 0 ? '+' : ''}${delta} м`
+
+            return `
+                            <tr class="hover:bg-gray-50 transition-colors duration-150">
+                                <td class="${TD} font-medium text-gray-900">${escapeHtml(r.point.id)}</td>
+                                <td class="${TD} text-gray-700 max-w-xs truncate" title="${escapeHtml(r.point.name)}">${escapeHtml(r.point.name)}</td>
+                                <td class="${TD} text-right font-mono text-gray-600">${r.straightDistanceMeters}</td>
+                                <td class="${TD} text-right font-mono text-gray-900 font-semibold">${r.walkingDistanceMeters}</td>
+                                <td class="${TD} text-right font-mono ${delta > 0 ? 'text-amber-600' : 'text-emerald-600'}">${deltaLabel}</td>
+                                <td class="${TD} text-right font-mono text-gray-600">${ROUTE_SOURCE_LABELS[r.routeSource]}</td>
+                            </tr>`
+        })
+        .join('')
+
+    return renderSection({
+        title: 'Евклід проти мережі',
+        badge: `${rows.length} точок`,
+        bodyHtml: `
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200">
+                        <thead class="bg-slate-50">
+                            <tr>
+                                <th scope="col" class="${TH_LEFT}">ID</th>
+                                <th scope="col" class="${TH_LEFT}">Локація</th>
+                                <th scope="col" class="${TH_RIGHT}">Евклід (м)</th>
+                                <th scope="col" class="${TH_RIGHT}">Мережа (м)</th>
+                                <th scope="col" class="${TH_RIGHT}">Δ</th>
+                                <th scope="col" class="${TH_RIGHT}">Джерело</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 bg-white">${body}
+                        </tbody>
+                    </table>
+                </div>`,
+    })
+}
+
 function renderCategorySection(summary: AccessibilitySummary): string {
     const stats = calculateCategoryAccessibilityStats(summary.results)
     if (stats.length === 0) return ''
 
     const pct = (v: number) => `${Math.round(v)}%`
+    const ciText = ([lo, hi]: [number, number]) => `${lo.toFixed(0)}–${hi.toFixed(0)}%`
     const rows = stats
         .sort((a, b) => a.coverage5 - b.coverage5)
         .map(
             (s) => `
                             <tr class="hover:bg-gray-50 transition-colors duration-150">
                                 <td class="${TD} font-medium text-gray-900">${escapeHtml(categoryLabel(s.category))}</td>
-                                <td class="${TD} text-gray-600 text-right font-mono">${s.count}</td>
+                                <td class="${TD} text-gray-600 text-right font-mono">${s.n}</td>
                                 <td class="${TD} text-gray-900 text-right font-mono">${pct(s.coverage5)}</td>
                                 <td class="${TD} text-gray-900 text-right font-mono">${pct(s.coverage10)}</td>
+                                <td class="${TD} text-gray-600 text-right font-mono">${ciText(s.coverage5Ci95)}</td>
+                                <td class="${TD} text-gray-600 text-right font-mono">${ciText(s.coverage10Ci95)}</td>
                                 <td class="${TD} text-gray-600 text-right font-mono">${(s.avgTime / 60).toFixed(1)}</td>
                                 <td class="${TD} text-gray-600 text-right font-mono">${(s.medianTime / 60).toFixed(1)}</td>
                                 <td class="${TD} text-gray-600 text-right font-mono">${s.avgCircuity.toFixed(2)}</td>
@@ -188,9 +246,11 @@ function renderCategorySection(summary: AccessibilitySummary): string {
                         <thead class="bg-slate-50">
                             <tr>
                                 <th scope="col" class="${TH_LEFT}">Категорія</th>
-                                <th scope="col" class="${TH_RIGHT}">Точок</th>
+                                <th scope="col" class="${TH_RIGHT}">n</th>
                                 <th scope="col" class="${TH_RIGHT}">5 хв</th>
                                 <th scope="col" class="${TH_RIGHT}">10 хв</th>
+                                <th scope="col" class="${TH_RIGHT}">95% CI 5 хв</th>
+                                <th scope="col" class="${TH_RIGHT}">95% CI 10 хв</th>
                                 <th scope="col" class="${TH_RIGHT}">Сер. час (хв)</th>
                                 <th scope="col" class="${TH_RIGHT}">Медіана (хв)</th>
                                 <th scope="col" class="${TH_RIGHT}">Сер. CF</th>
@@ -268,18 +328,18 @@ export function exportAccessibilityReportHtml(
                     </ul>`
 
     const notes = `<p class="mb-2"><strong>CF (Circuity Factor):</strong> Відношення довжини пішохідного маршруту до прямої відстані. Чим ближче до 1.0, тим пряміший шлях.</p>
-                    <p>Маршрутизація виконана через OSRM (профіль пішохода); розглянуто ${maxCandidates} найближчих вбиральні для кожної точки. У межах зони точки відсортовано від найдовшого часу ходу.</p>
-                    <p class="mt-2 text-xs italic">* Для точок у межах прямої видимості (≤ 180 м) чи де OSRM не зміг прокласти маршрут (парки, набережні), використано евклідову відстань або оцінку з коефіцієнтом обходу.</p>`
+                    <p>Маршрутизація виконана через OSRM (профіль пішохода); розглянуто ${maxCandidates} найближчих вбиральні для кожної точки. CF підраховується лише для маршрутів OSRM/корекції; прямі відстані та fallback не включаються в середнє.</p>
+                    <p class="mt-2 text-xs italic">* Для точок у межах прямої видимості (≤ 180 м) використовується direct route; якщо OSRM не зміг прокласти маршрут, застосовується fallback; для аномальних мережевих відхилень залишено лише захист від розриву графа.</p>`
 
     const html = renderReportPage({
         title: 'Звіт доступності вбиральень',
         heading: '🚽 Аналіз доступності міських вбиральень',
         subtitleHtml: `Звіт сформовано: <span class="font-medium text-slate-700">${dateStr}</span>`,
-        bodyHtml: kpis + renderCategorySection(summary) + zoneSections,
+        bodyHtml: kpis + renderCategorySection(summary) + renderEuclideanVsNetworkTable(summary.results) + zoneSections,
         footerHtml: renderFooterColumns(legend, notes),
     })
 
-    downloadFile(html, `accessibility_report_${new Date().toISOString().slice(0, 10)}.html`, 'text/html;charset=utf-8;')
+    downloadFile(html, `accessibility_report_${localFilenameDate()}.html`, 'text/html;charset=utf-8;')
 }
 
 function pluralPoints(n: number): string {

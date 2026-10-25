@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import type { Toilet } from '../../types'
+import type { ControlPoint } from '../data/controlPoints'
 import type { AccessibilitySummary } from '../utils/accessibility'
 import type { OptimizationSummary, OptimizationCandidate } from '../types/optimizationType'
 import { calculateCategoryAccessibilityStats } from '../utils/categoryStats'
@@ -15,6 +16,7 @@ const props = defineProps<{
     maxNearestDistanceMeters: number
   }
   accessibilityStats?: AccessibilitySummary | null
+  selectedCategories?: ControlPoint['category'][]
   optimizationSummary?: OptimizationSummary | null
   selectedCandidateIndex?: number | null
   isLoadingNetwork?: boolean
@@ -60,6 +62,7 @@ const emit = defineEmits<{
   (e: 'run-optimization'): void
   (e: 'select-candidate', candidate: OptimizationCandidate, index: number): void
   (e: 'show-candidate', lat: number, lng: number): void
+  (e: 'toggle-category', category: ControlPoint['category']): void
   (e: 'update:activeThreshold', threshold: 5 | 10): void
   (e: 'export-optimization-html'): void
   (e: 'export-optimization-csv'): void
@@ -283,7 +286,20 @@ const radiusOptions = [
                 </tr>
                 </thead>
                 <tbody>
-                <tr v-for="stat in categoryStats" :key="stat.category" class="border-t border-slate-100">
+                <tr
+                    v-for="stat in categoryStats"
+                    :key="stat.category"
+                    role="button"
+                    tabindex="0"
+                    :aria-pressed="selectedCategories?.includes(stat.category) ?? false"
+                    :class="[
+                      'border-t border-slate-100 cursor-pointer transition-colors hover:bg-indigo-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500',
+                      selectedCategories?.includes(stat.category) ? 'bg-indigo-50 font-semibold' : ''
+                    ]"
+                    @click="emit('toggle-category', stat.category)"
+                    @keydown.enter.prevent="emit('toggle-category', stat.category)"
+                    @keydown.space.prevent="emit('toggle-category', stat.category)"
+                >
                   <td class="p-1 font-medium text-slate-700">{{ stat.category }}</td>
                   <td class="p-1 text-center text-indigo-600 font-bold">{{ Math.round(stat.coverage5) }}%</td>
                   <td class="p-1 text-center text-amber-600 font-semibold">{{ Math.round(stat.coverage10) }}%</td>

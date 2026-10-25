@@ -2,6 +2,7 @@ import { ref, shallowRef } from 'vue'
 import maplibregl from 'maplibre-gl'
 import type { Point } from 'geojson'
 import type { Toilet } from '../types.ts'
+import type { ControlPoint } from '../analytics/data/controlPoints'
 import type { AccessibilitySummary } from '../analytics/utils/accessibility'
 
 export type LatLng = [number, number]
@@ -30,6 +31,16 @@ export function useMap() {
     const center = ref<LngLat>([35.0461, 48.4647])
     const selectedToiletId = ref<string | null>(null)
     const currentThreshold = ref<5 | 10>(5)
+    let activePopup: maplibregl.Popup | null = null
+
+    const openPopup = (lng: number, lat: number, html: string) => {
+        if (!map.value) return
+        activePopup?.remove()
+        activePopup = new maplibregl.Popup({ offset: 12, closeButton: false, maxWidth: '240px' })
+            .setLngLat([lng, lat])
+            .setHTML(html)
+            .addTo(map.value)
+    }
 
     // ==========================================================
     // COORDINATE HELPERS
@@ -146,6 +157,8 @@ export function useMap() {
             })
             if (features.length === 0) {
                 clearRouteTrace()
+                activePopup?.remove()
+                activePopup = null
             }
         })
 
@@ -488,7 +501,12 @@ export function useMap() {
             features: controlPoints.map((cp) => ({
                 type: 'Feature',
                 geometry: { type: 'Point', coordinates: [cp.longitude, cp.latitude] },
-                properties: { name: cp.name, id: cp.id }
+                properties: {
+                    name: cp.name,
+                    id: cp.id,
+                    latitude: cp.latitude,
+                    longitude: cp.longitude
+                }
             }))
         }
 
@@ -511,6 +529,35 @@ export function useMap() {
                 'circle-stroke-color': '#ffffff'
             }
         })
+
+        map.value.on('click', 'control-points-layer', (e) => {
+            const feature = e.features?.[0]
+            if (!feature) return
+
+            const deficitFeatures = map.value?.queryRenderedFeatures(e.point, { layers: ['uncovered-points-core'] }) ?? []
+            if (deficitFeatures.length > 0) return
+
+            const props = feature.properties as Record<string, string | number | undefined>
+            const lng = Number(props.longitude)
+            const lat = Number(props.latitude)
+            const title = `${props.id} ${props.name ?? 'Контрольна точка'}`;
+            const coordsText = `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+
+            openPopup(lng, lat, `
+                <div style="padding: 6px 10px; font-family: sans-serif; font-size: 11px; line-height: 1.4; max-width: 220px;">
+                    <div style="font-weight: 800; color: #dc2626; margin-bottom: 2px;">📍 Контрольна точка</div>
+                    <div style="font-weight: 600; color: #1e293b; margin-bottom: 2px;">${title}</div>
+                    <div style="color: #475569;">Координати: <b>${coordsText}</b></div>
+                </div>
+            `)
+        })
+
+        map.value.on('mouseenter', 'control-points-layer', () => {
+            if (map.value) map.value.getCanvas().style.cursor = 'pointer'
+        })
+        map.value.on('mouseleave', 'control-points-layer', () => {
+            if (map.value) map.value.getCanvas().style.cursor = ''
+        })
     }
 
     const clearControlPointsLayer = () => {
@@ -522,13 +569,18 @@ export function useMap() {
     // ==========================================================
     // РЕНДЕР ТОЧОК ДЕФІЦИТУ (НЕПОКРИТИХ ТОЧОК)
     // ==========================================================
-    const renderUncoveredPoints = (stats: AccessibilitySummary | null, threshold: 5 | 10 = 5) => {
+    const renderUncoveredPoints = (
+        stats: AccessibilitySummary | null,
+        threshold: 5 | 10 = 5,
+        categories: ControlPoint['category'][] = []
+    ) => {
         if (!map.value || !stats) return
         currentThreshold.value = threshold
 
         // 🎯 Динамічна фільтрація залежно від обраного нормативу (5 або 10 хв)
         const uncovered = stats.results.filter(r => {
             if (!r.analyzed) return false
+            if (categories.length > 0 && !categories.includes(r.point.category)) return false
             return threshold === 5 ? !r.isAccessible5Min : !r.isAccessible10Min
         })
 
@@ -605,16 +657,13 @@ export function useMap() {
                 renderRouteTrace(ptCoords, [props.toiletLng, props.toiletLat])
             }
 
-            new maplibregl.Popup({ offset: 12, closeButton: false })
-                .setLngLat(ptCoords)
-                .setHTML(`
-            <div style="padding: 6px 10px; font-family: sans-serif; font-size: 11px; line-height: 1.3;">
-                <div style="font-weight: 800; color: #dc2626; margin-bottom: 2px;">⚠️ Дефіцитна зона (${currentThreshold.value} хв норматив)</div>
-                <div style="font-weight: 600; color: #1e293b;">${props.name}</div>
-                <div style="color: #64748b; margin-top: 4px;">Час ходу: <b>${props.timeMin} хв</b> (${props.distance} м)</div>
-            </div>
-        `)
-                .addTo(map.value!)
+            openPopup(ptCoords[0], ptCoords[1], `
+                <div style="padding: 6px 10px; font-family: sans-serif; font-size: 11px; line-height: 1.3;">
+                    <div style="font-weight: 800; color: #dc2626; margin-bottom: 2px;">⚠️ Дефіцитна зона (${currentThreshold.value} хв норматив)</div>
+                    <div style="font-weight: 600; color: #1e293b;">${props.name}</div>
+                    <div style="color: #64748b; margin-top: 4px;">Час ходу: <b>${props.timeMin} хв</b> (${props.distance} м)</div>
+                </div>
+            `)
         })
 
         map.value.on('mouseenter', 'uncovered-points-core', () => {

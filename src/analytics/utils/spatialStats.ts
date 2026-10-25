@@ -1,5 +1,6 @@
 import * as turf from '@turf/turf'
 import type { Toilet } from '../../types'
+import { average, median } from './math'
 
 export interface GisSummaryStats {
     totalToilets: number
@@ -9,6 +10,8 @@ export interface GisSummaryStats {
     minNearestDistanceMeters: number
     maxNearestDistanceMeters: number
 }
+
+const localFilenameDate = () => new Date().toLocaleDateString('sv-SE')
 
 // Константи для fallback назв
 const FALLBACK_NAMES = {
@@ -24,35 +27,6 @@ function getToiletName(toilet: Toilet, index: number): string {
         ? FALLBACK_NAMES.bio
         : FALLBACK_NAMES.public
     return toilet.address || `${baseName} #${index + 1}`
-}
-
-/**
- * Розраховує середнє арифметичне значення масиву чисел
- */
-export function average(values: number[]): number {
-    if (values.length === 0) return 0
-
-    // Фільтруємо нескінченні та нечислові значення
-    const finiteValues = values.filter(v => typeof v === 'number' && isFinite(v))
-    if (finiteValues.length === 0) return 0
-
-    return finiteValues.reduce((sum, value) => sum + value, 0) / finiteValues.length
-}
-
-/**
- * Розраховує медіану масиву чисел
- */
-export function median(values: number[]): number {
-    if (values.length === 0) return 0
-
-    const sorted = [...values].sort((a, b) => a - b)
-    const middle = Math.floor(sorted.length / 2)
-
-    if (sorted.length % 2 === 0) {
-        return (sorted[middle - 1] + sorted[middle]) / 2
-    }
-
-    return sorted[middle]
 }
 
 /**
@@ -189,8 +163,9 @@ export function exportGisReportCsv(
 
     // 1. Метадані аналізу
     let csvContent = '\uFEFF' // UTF-8 BOM для коректного відкриття в Excel
+    const reportDate = new Date()
     csvContent += 'ЗВІТ ГІС-АНАЛІТИКИ ДОСТУПНОСТІ МІСЬКИХ ВБИРАЛЬНЬ\n'
-    csvContent += `Дата формування;${new Date().toLocaleDateString('uk-UA')}\n`
+    csvContent += `Дата формування;${reportDate.toLocaleDateString('uk-UA', { timeZone: 'Europe/Kyiv' })}\n`
     csvContent += `Обраний радіус пішої доступності;${stats.bufferRadiusKm * 1000} м (${stats.bufferRadiusKm} км)\n`
     csvContent += `Загальна кількість об'єктів;${stats.totalToilets}\n`
     csvContent += `Середня відстань до найближчого сусіда;${stats.avgNearestNeighborDistanceMeters} м\n`
@@ -222,7 +197,7 @@ export function exportGisReportHtml(
     stats: GisSummaryStats
 ) {
     const validToilets = toilets.filter((t) => t.latitude != null && t.longitude != null)
-    const dateStr = new Date().toLocaleDateString('uk-UA')
+    const dateStr = new Date().toLocaleDateString('uk-UA', { timeZone: 'Europe/Kyiv' })
 
     // Генеруємо рядки таблиці
     const generateRows = () => {
@@ -306,7 +281,7 @@ export function exportGisReportHtml(
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `gis_spatial_stats_${new Date().toISOString().slice(0,10)}.html`
+    link.download = `gis_spatial_stats_${localFilenameDate()}.html`
     document.body.appendChild(link)
     link.click()
     setTimeout(() => {

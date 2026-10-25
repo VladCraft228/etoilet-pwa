@@ -9,6 +9,8 @@ export interface OptimizationCandidate {
     avgWalkingTime: number
     avgCircuity: number
     improvedPoints: number
+    score: number
+    n: number
 }
 
 export interface OptimizationParams {

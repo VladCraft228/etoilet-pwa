@@ -1,11 +1,13 @@
 import type { Toilet } from '../../types'
 import type { ControlPoint } from '../data/controlPoints'
 import { getStraightDistance } from '../../components/utils/geo'
-import { median } from './spatialStats.ts'
+import { median } from './math'
 
 // ==========================================================
 // TYPES
 // ==========================================================
+
+export type RouteSource = 'direct' | 'osrm' | 'fallback' | 'correction'
 
 export interface ControlPointAnalysisResult {
     point: ControlPoint
@@ -14,6 +16,7 @@ export interface ControlPointAnalysisResult {
     walkingDistanceMeters: number
     walkingDurationSeconds: number
     circuityFactor: number
+    routeSource: RouteSource
     isAccessible5Min: boolean
     isAccessible10Min: boolean
     analyzed: boolean
@@ -232,23 +235,25 @@ export async function evaluateControlPointsAccessibilityNetwork(
                 walkingDistanceMeters: 0,
                 walkingDurationSeconds: 0,
                 circuityFactor: 0,
+                routeSource: 'fallback',
                 isAccessible5Min: false,
                 isAccessible10Min: false,
                 analyzed: false,
             }
         } else {
             const nearestCandidate = candidates[0]
-            const straightDistance = Math.round(nearestCandidate.dist)
+            const nearestStraightDistance = Math.round(nearestCandidate.dist)
 
-            if (straightDistance <= STRAIGHT_LINE_THRESHOLD_METERS) {
-                const walkingDuration = Math.round(straightDistance / WALKING_SPEED_MPS)
+            if (nearestStraightDistance <= STRAIGHT_LINE_THRESHOLD_METERS) {
+                const walkingDuration = Math.round(nearestStraightDistance / WALKING_SPEED_MPS)
                 result = {
                     point: cp,
                     nearestToilet: nearestCandidate.toilet,
-                    straightDistanceMeters: straightDistance,
-                    walkingDistanceMeters: straightDistance,
+                    straightDistanceMeters: nearestStraightDistance,
+                    walkingDistanceMeters: nearestStraightDistance,
                     walkingDurationSeconds: walkingDuration,
                     circuityFactor: 1.0,
+                    routeSource: 'direct',
                     isAccessible5Min: true,
                     isAccessible10Min: true,
                     analyzed: true,
@@ -273,44 +278,49 @@ export async function evaluateControlPointsAccessibilityNetwork(
                 }
 
                 if (!bestResult) {
-                    const fallbackDistance = Math.round(straightDistance * FALLBACK_CIRCUITY_FACTOR)
+                    const fallbackDistance = Math.round(nearestStraightDistance * FALLBACK_CIRCUITY_FACTOR)
                     const fallbackDuration = Math.round(fallbackDistance / WALKING_SPEED_MPS)
 
                     result = {
                         point: cp,
                         nearestToilet: nearestCandidate.toilet,
-                        straightDistanceMeters: straightDistance,
+                        straightDistanceMeters: nearestStraightDistance,
                         walkingDistanceMeters: fallbackDistance,
                         walkingDurationSeconds: fallbackDuration,
                         circuityFactor: FALLBACK_CIRCUITY_FACTOR,
+                        routeSource: 'fallback',
                         isAccessible5Min: fallbackDuration <= FIVE_MINUTES_SECONDS,
                         isAccessible10Min: fallbackDuration <= TEN_MINUTES_SECONDS,
                         analyzed: true,
                     }
                 } else {
+                    const chosenStraightDistance = Math.round(
+                        getStraightDistance(
+                            cp.latitude,
+                            cp.longitude,
+                            bestResult.candidate.toilet.latitude!,
+                            bestResult.candidate.toilet.longitude!
+                        )
+                    )
+
                     let walkingDistance = bestResult.route.distanceMeters
                     let walkingDuration = bestResult.route.durationSeconds
-                    let circuityFactor = straightDistance > 0
-                        ? Number((walkingDistance / straightDistance).toFixed(2))
+                    let circuityFactor = chosenStraightDistance > 0
+                        ? Number((walkingDistance / chosenStraightDistance).toFixed(2))
                         : 1
 
-                    if (walkingDistance > straightDistance * 3 || walkingDistance > 1000) {
-                        walkingDistance = Math.round(straightDistance * 1.3)
-                        walkingDuration = Math.round(walkingDistance / WALKING_SPEED_MPS)
-                        circuityFactor = 1.3
-                    }
-
-                    if (circuityFactor > 2.0 && straightDistance <= 250) {
-                        const correctedDistance = Math.round(straightDistance * 1.25)
+                    if (circuityFactor > 2.0 && chosenStraightDistance <= 250) {
+                        const correctedDistance = Math.round(chosenStraightDistance * 1.25)
                         const correctedDuration = Math.round(correctedDistance / WALKING_SPEED_MPS)
 
                         result = {
                             point: cp,
                             nearestToilet: bestResult.candidate.toilet,
-                            straightDistanceMeters: straightDistance,
+                            straightDistanceMeters: chosenStraightDistance,
                             walkingDistanceMeters: correctedDistance,
                             walkingDurationSeconds: correctedDuration,
                             circuityFactor: 1.25,
+                            routeSource: 'correction',
                             isAccessible5Min: correctedDuration <= FIVE_MINUTES_SECONDS,
                             isAccessible10Min: correctedDuration <= TEN_MINUTES_SECONDS,
                             analyzed: true,
@@ -319,10 +329,11 @@ export async function evaluateControlPointsAccessibilityNetwork(
                         result = {
                             point: cp,
                             nearestToilet: bestResult.candidate.toilet,
-                            straightDistanceMeters: straightDistance,
+                            straightDistanceMeters: chosenStraightDistance,
                             walkingDistanceMeters: walkingDistance,
                             walkingDurationSeconds: walkingDuration,
                             circuityFactor,
+                            routeSource: 'osrm',
                             isAccessible5Min: walkingDuration <= FIVE_MINUTES_SECONDS,
                             isAccessible10Min: walkingDuration <= TEN_MINUTES_SECONDS,
                             analyzed: true,
@@ -386,7 +397,10 @@ function calculateSummary(totalPoints: number, results: ControlPointAnalysisResu
     const straightDistances = successfulResults.map((r) => r.straightDistanceMeters)
     const walkingDistances = successfulResults.map((r) => r.walkingDistanceMeters)
     const walkingTimes = successfulResults.map((r) => r.walkingDurationSeconds)
-    const circuityFactors = successfulResults.map((r) => r.circuityFactor)
+    const networkLikeResults = successfulResults.filter(
+        (r) => r.routeSource === 'osrm' || r.routeSource === 'correction'
+    )
+    const circuityFactors = networkLikeResults.map((r) => r.circuityFactor)
 
     const safeAvg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length
     const safeRound = (n: number) => Math.round(n)
@@ -405,8 +419,8 @@ function calculateSummary(totalPoints: number, results: ControlPointAnalysisResu
         medianWalkingDistanceMeters: safeRound(median(walkingDistances)),
         avgWalkingTimeMins: safeRound(safeAvg(walkingTimes) / 60),
         medianWalkingTimeMins: safeRound(median(walkingTimes) / 60),
-        avgCircuityFactor: Number(safeAvg(circuityFactors).toFixed(2)),
-        medianCircuityFactor: Number(median(circuityFactors).toFixed(2)),
+        avgCircuityFactor: circuityFactors.length > 0 ? Number(safeAvg(circuityFactors).toFixed(2)) : 0,
+        medianCircuityFactor: circuityFactors.length > 0 ? Number(median(circuityFactors).toFixed(2)) : 0,
         results
     }
 }

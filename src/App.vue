@@ -33,6 +33,7 @@ import EditToiletModal from './components/features/EditToiletModal.vue'
 import RelocateOverlay from './components/map/RelocateOverlay.vue'
 
 import type {Toilet} from './types.ts'
+import type {ControlPoint} from './analytics/data/controlPoints.ts'
 import {useGisAnalytics} from "./analytics/composables/useGisAnalytics.ts";
 import ReportToiletModal from "./components/features/ReportToiletModal.vue";
 import {getStraightDistance} from "./components/utils/geo.ts";
@@ -158,6 +159,21 @@ const {
   downloadOptimizationCsvReport
 } = useGisAnalytics()
 
+const selectedControlPointCategories = ref<ControlPoint['category'][]>([])
+const visibleControlPoints = computed(() => {
+  if (selectedControlPointCategories.value.length === 0) return controlPoints
+
+  return controlPoints.filter((point) =>
+      selectedControlPointCategories.value.includes(point.category)
+  )
+})
+
+const toggleControlPointCategory = (category: ControlPoint['category']) => {
+  selectedControlPointCategories.value = selectedControlPointCategories.value.includes(category)
+      ? selectedControlPointCategories.value.filter((selected) => selected !== category)
+      : [...selectedControlPointCategories.value, category]
+}
+
 const toast = useToast()
 
 // ==========================================================
@@ -170,7 +186,7 @@ const handleToggleAnalytics = () => {
   if (isAnalyticsActive.value) {
     const geojson = getBuffersGeoJSON(approvedToilets.value)
     renderAnalyticsBuffers(geojson)
-    renderControlPointsLayer(controlPoints)
+    renderControlPointsLayer(visibleControlPoints.value)
   } else {
     clearAnalyticsBuffers()
     clearVirtualMarkers()
@@ -230,13 +246,13 @@ const handleMapClickForAnalytics = (e: maplibregl.MapMouseEvent) => {
 
 // Об'єднаний watch для оновлення віртуальних точок, контрольних точок та буферів
 watch(
-    [virtualToilets, bufferRadiusKm, isAnalyticsActive],
+    [virtualToilets, bufferRadiusKm, isAnalyticsActive, visibleControlPoints],
     () => {
       if (isAnalyticsActive.value) {
         const geojson = getBuffersGeoJSON(approvedToilets.value)
         renderAnalyticsBuffers(geojson)
         renderVirtualMarkers(virtualToilets.value)
-        renderControlPointsLayer(controlPoints)
+        renderControlPointsLayer(visibleControlPoints.value)
       } else {
         clearVirtualMarkers()
         clearControlPointsLayer()
@@ -1544,9 +1560,13 @@ watch(isAdmin, (loggedIn) => {
 })
 
 // Автоматичне оновлення шару дефіциту при зміні статистики
-watch([accessibilityNetworkStats, activeAccessibilityThreshold], ([newStats]) => {
+watch([accessibilityNetworkStats, activeAccessibilityThreshold, selectedControlPointCategories], ([newStats]) => {
   if (newStats && isAnalyticsActive.value) {
-    renderUncoveredPoints(newStats, activeAccessibilityThreshold.value)
+    renderUncoveredPoints(
+        newStats,
+        activeAccessibilityThreshold.value,
+        selectedControlPointCategories.value
+    )
   } else {
     clearUncoveredPoints()
   }
@@ -1556,7 +1576,11 @@ watch(isAnalyticsActive, (isActive) => {
   if (!isActive) {
     clearUncoveredPoints()
   } else if (accessibilityNetworkStats.value) {
-    renderUncoveredPoints(accessibilityNetworkStats.value)
+    renderUncoveredPoints(
+        accessibilityNetworkStats.value,
+        activeAccessibilityThreshold.value,
+        selectedControlPointCategories.value
+    )
   }
 })
 
@@ -2164,6 +2188,7 @@ onUnmounted(() => {
           :toilets="approvedToilets"
           :stats="gisStats"
           :accessibility-stats="accessibilityNetworkStats"
+          :selected-categories="selectedControlPointCategories"
           :is-loading-network="isCalculatingNetwork"
           :network-progress="networkProgress"
           :is-simulation-mode="isSimulationMode"
@@ -2176,6 +2201,7 @@ onUnmounted(() => {
           @run-optimization="handleRunOptimization"
           @select-candidate="handleSelectCandidate"
           @show-candidate="handleShowBestCandidate"
+          @toggle-category="toggleControlPointCategory"
           @change-radius="handleChangeRadius"
 
           @export-csv="downloadCsvReport(approvedToilets)"

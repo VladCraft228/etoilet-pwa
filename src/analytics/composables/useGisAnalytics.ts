@@ -14,6 +14,7 @@ import { runCandidateBenchmark } from '../utils/accessibilityBenchmark'
 import {
     evaluateCandidate,
     generateCandidateGrid,
+    greedySelectDistinctCandidates,
     snapToWalkableNetwork,
     MAX_SNAP_DISTANCE_METERS,
     MIN_DISTANCE_TO_EXISTING_METERS
@@ -158,27 +159,24 @@ export function useGisAnalytics() {
             (r) => !r.isAccessible5Min || !r.isAccessible10Min
         )
 
-        console.log(`🔍 Кількість потенційних точок для перевірки: ${total}`)
-        console.log(`📍 Непокритих або проблемних контрольних точок: ${uncoveredPoints.length}`)
+        const uncoveredPointCoords = uncoveredPoints.map((p) => ({
+            latitude: p.point.latitude,
+            longitude: p.point.longitude,
+        }))
 
         for (let i = 0; i < total; i++) {
             const { latitude: lat, longitude: lng } = candidates[i]
 
-            // ШВИДКИЙ ПРОСТОРОВИЙ ФІЛЬТР (Pre-filtering):
-            // Перевіряємо, чи знаходиться кандидат у межах 1500м по прямій хоча б від однієї непокритої точки
+            // ШВИДКИЙ ПРОСТОРОВИЙ ФІЛЬТР: кандидат має бути хоча б поряд з однією дефіцитною точкою.
+            // Це відсікає більшість вузлів до дорогих OSRM-обчислень без втрати якості пошуку.
             const candPoint = turf.point([lng, lat])
-            const isNearUncovered = uncoveredPoints.some((uncovered) => {
-                const ptPoint = turf.point([
-                    uncovered.point.longitude,
-                    uncovered.point.latitude
-                ])
-                const distMeters = turf.distance(candPoint, ptPoint, { units: 'meters' })
-                return distMeters <= 1500
+            const isNearUncovered = uncoveredPointCoords.some((point) => {
+                const ptPoint = turf.point([point.longitude, point.latitude])
+                return turf.distance(candPoint, ptPoint, { units: 'meters' }) <= 1500
             })
 
             // Якщо кандидат знаходиться занадто далеко від усіх проблемних точок, пропускаємо запити до OSRM
             if (uncoveredPoints.length > 0 && !isNearUncovered) {
-                console.log(`⏭️ [${i + 1}/${total}] Кандидат [${lat.toFixed(4)}, ${lng.toFixed(4)}] пропущений (занадто далеко від дефіцитних зон).`)
                 onProgress?.(Math.round(((i + 1) / total) * 100))
                 continue
             }
@@ -187,7 +185,6 @@ export function useGisAnalytics() {
             // Якщо найближча дорога далі за 40 м (Дніпро, затоки) — кандидата відкидаємо.
             const snapped = await snapToWalkableNetwork(lat, lng)
             if (!snapped) {
-                console.log(`🌊 [${i + 1}/${total}] Кандидат [${lat.toFixed(4)}, ${lng.toFixed(4)}] відкинуто (поза пішохідною мережею, ймовірно вода).`)
                 onProgress?.(Math.round(((i + 1) / total) * 100))
                 continue
             }
@@ -215,7 +212,6 @@ export function useGisAnalytics() {
             }
 
             const { latitude: candLat, longitude: candLng } = snapped
-            console.log(`⏳ [${i + 1}/${total}] Оцінка OSRM для кандидата: Lat ${candLat.toFixed(5)}, Lng ${candLng.toFixed(5)}...`)
 
             const virtualToilet: Toilet = {
                 id: `opt-${candLat}-${candLng}`,
@@ -235,13 +231,8 @@ export function useGisAnalytics() {
             onProgress?.(Math.round(((i + 1) / total) * 100))
         }
 
-        console.log(`✅ Протестовано кандидатів з OSRM: ${results.length}`)
-
-        return results.sort((a, b) =>
-            b.deltaCoverage5 - a.deltaCoverage5 ||
-            b.deltaCoverage10 - a.deltaCoverage10 ||
-            a.avgWalkingDistance - b.avgWalkingDistance
-        )
+        const greedyResults = greedySelectDistinctCandidates(results, 300)
+        return greedyResults.sort((a, b) => b.score - a.score || b.deltaCoverage5 - a.deltaCoverage5)
     }
 
     const runOptimizationTest = async (
@@ -249,17 +240,22 @@ export function useGisAnalytics() {
     ): Promise<OptimizationSummary | null> => {
         isOptimizing.value = true
         optimizationProgress.value = 0
-        console.group('🚀 [WHAT-IF] Запуск симуляції оптимізації локацій')
-
         try {
-            // Крок 0.008 відповідає приблизно 700-800 метрам між точками сітки (оптимально для швидкої перевірки дефіциту)
+            // Кандидатна сітка ширша за географію контрольних точок, але не виходить за межі міської території.
+            // Це дає простір для пошуку нових локацій без зайвого розширення області й збереження швидкості обчислень.
             const GRID_STEP = 0.008
-            const BOUNDS = { minLatitude: 48.42, maxLatitude: 48.52, minLongitude: 34.95, maxLongitude: 35.08 }
+            const latitudes = DNIPRO_CONTROL_POINTS.map((p) => p.latitude)
+            const longitudes = DNIPRO_CONTROL_POINTS.map((p) => p.longitude)
+            const BOUNDS = {
+                minLatitude: Math.min(...latitudes) - 0.04,
+                maxLatitude: Math.max(...latitudes) + 0.04,
+                minLongitude: Math.min(...longitudes) - 0.05,
+                maxLongitude: Math.max(...longitudes) + 0.05,
+            }
             const candidates = generateCandidateGrid(
                 BOUNDS.minLatitude, BOUNDS.maxLatitude, BOUNDS.minLongitude, BOUNDS.maxLongitude, GRID_STEP
             )
 
-            console.log('📡 Розрахунок базового стану доступності (Baseline)...')
             const baseline = await evaluateControlPointsAccessibilityNetwork(
                 DNIPRO_CONTROL_POINTS,
                 realToilets
@@ -295,7 +291,6 @@ export function useGisAnalytics() {
                 topCandidates: top5,
             }
 
-            console.log('🎯 [WHAT-IF] Результати оптимізації готоvisualized! ТОП-5:', top5)
 
             optimizationSummary.value = summary
             saveToStorage(CACHE_KEYS.OPTIMIZATION, summary)

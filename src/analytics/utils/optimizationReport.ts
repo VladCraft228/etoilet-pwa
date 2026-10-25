@@ -55,8 +55,10 @@ const fmtDelta = (v: number) => `${v > 0 ? '+' : ''}${Number(v.toFixed(1))}%`
 const mapsLink = (c: OptimizationCandidate) =>
     `https://www.google.com/maps?q=${c.latitude.toFixed(6)},${c.longitude.toFixed(6)}`
 
+const localFilenameDate = () => new Date().toLocaleDateString('sv-SE')
+
 // ==========================================================
-// SVG-МАПА (без зовнішніх бібліотек, працює офлайн і при друку)
+// SVG-СХЕМА (запасний варіант без зовнішніх бібліотек, працює офлайн)
 // ==========================================================
 
 function buildMapSvg(
@@ -134,6 +136,172 @@ function buildMapSvg(
 }
 
 // ==========================================================
+// ІНТЕРАКТИВНА МАПА (MapLibre + OpenFreeMap, як на головній) із SVG-запасним варіантом
+// ==========================================================
+
+// Той самий стиль і бібліотека, що й на головній мапі застосунку (useMap.ts).
+const MAPLIBRE_VERSION = '5.24.0'
+const MAPLIBRE_CSS_SRI = 'sha256-qx5w1Z7EBGW65+cDDaLzzPKBM/1QLmK9WY7vut/XpzI='
+const MAPLIBRE_JS_SRI = 'sha256-RamwepGJzlYFTGIKlHzPQeKR5YyV6bYVM7dAqqZe5cs='
+const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/bright'
+
+interface MapPayload {
+    candidates: Array<{ rank: number; lat: number; lng: number; d5: string; d10: string }>
+    toilets: Array<{ lat: number; lng: number; bio: boolean }>
+    controlPoints: Array<{ lat: number; lng: number; name: string; zone: 'ok' | 'mid' | 'bad' | 'na' }>
+}
+
+function buildMapPayload(
+    rows: ReportRow[],
+    toilets: Toilet[],
+    accessibility: AccessibilitySummary | null | undefined
+): MapPayload {
+    const controlResults = accessibility?.results ?? []
+
+    const lats = [...rows.map((r) => r.candidate.latitude), ...controlResults.map((r) => r.point.latitude)]
+    const lngs = [...rows.map((r) => r.candidate.longitude), ...controlResults.map((r) => r.point.longitude)]
+    const minLat = Math.min(...lats) - 0.01
+    const maxLat = Math.max(...lats) + 0.01
+    const minLng = Math.min(...lngs) - 0.015
+    const maxLng = Math.max(...lngs) + 0.015
+
+    return {
+        candidates: rows.map((r) => ({
+            rank: r.rank,
+            lat: r.candidate.latitude,
+            lng: r.candidate.longitude,
+            d5: fmtDelta(r.candidate.deltaCoverage5),
+            d10: fmtDelta(r.candidate.deltaCoverage10),
+        })),
+        toilets: toilets
+            .filter(
+                (t) =>
+                    t.latitude != null &&
+                    t.longitude != null &&
+                    t.latitude >= minLat &&
+                    t.latitude <= maxLat &&
+                    t.longitude >= minLng &&
+                    t.longitude <= maxLng
+            )
+            .map((t) => ({ lat: t.latitude!, lng: t.longitude!, bio: t.type === 'bio' })),
+        controlPoints: controlResults.map((r) => ({
+            lat: r.point.latitude,
+            lng: r.point.longitude,
+            name: r.point.name,
+            zone: !r.analyzed ? 'na' : r.isAccessible5Min ? 'ok' : r.isAccessible10Min ? 'mid' : 'bad',
+        })),
+    }
+}
+
+/**
+ * Інтерактивна карта Дніпра з маркерами. Якщо MapLibre, WebGL або стиль недоступні
+ * (офлайн), залишається статична SVG-схема.
+ */
+function buildMapBlock(
+    rows: ReportRow[],
+    toilets: Toilet[],
+    accessibility: AccessibilitySummary | null | undefined
+): string {
+    const svg = buildMapSvg(rows, toilets, accessibility)
+    if (!svg) return ''
+
+    // `<` екрануємо, щоб назва точки не могла закрити <script>
+    const payload = JSON.stringify(buildMapPayload(rows, toilets, accessibility)).replace(/</g, '\\u003c')
+
+    return `
+                <div class="p-4">
+                    <div id="opt-map" class="hidden w-full rounded border border-slate-200" style="height: 560px;"></div>
+                    <div id="opt-map-fallback">
+                        ${svg}
+                        <p class="mt-2 text-xs text-slate-400 text-center">Інтерактивну мапу не завантажено (потрібен інтернет) — показано спрощену схему.</p>
+                    </div>
+                </div>
+                <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@${MAPLIBRE_VERSION}/dist/maplibre-gl.css" integrity="${MAPLIBRE_CSS_SRI}" crossorigin="">
+                <script src="https://unpkg.com/maplibre-gl@${MAPLIBRE_VERSION}/dist/maplibre-gl.js" integrity="${MAPLIBRE_JS_SRI}" crossorigin=""></script>
+                <script>
+                (function () {
+                    if (!window.maplibregl) return;
+                    var data = ${payload};
+                    var mapEl = document.getElementById('opt-map');
+                    var fallbackEl = document.getElementById('opt-map-fallback');
+
+                    var showFallback = function () {
+                        mapEl.classList.add('hidden');
+                        fallbackEl.style.display = '';
+                    };
+
+                    var map;
+                    try {
+                        mapEl.classList.remove('hidden');
+                        fallbackEl.style.display = 'none';
+                        map = new maplibregl.Map({
+                            container: mapEl,
+                            style: '${MAP_STYLE_URL}',
+                            center: [35.0462, 48.4647],
+                            zoom: 11,
+                            maxZoom: 19,
+                            cooperativeGestures: true,
+                            attributionControl: { compact: true }
+                        });
+                    } catch (e) {
+                        showFallback();
+                        return;
+                    }
+
+                    // Стиль не завантажився (офлайн / немає WebGL) — повертаємо SVG-схему
+                    var styleLoaded = false;
+                    map.on('load', function () { styleLoaded = true; map.resize(); });
+                    map.on('error', function () { if (!styleLoaded) showFallback(); });
+
+                    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+                    map.scrollZoom.enable();   
+                    map.touchZoomRotate.enable();
+
+                    var zoneColor = { ok: '#22c55e', mid: '#eab308', bad: '#ef4444', na: '#94a3b8' };
+                    var bounds = new maplibregl.LngLatBounds();
+
+                    var addMarker = function (el, lng, lat, title) {
+                        if (title) el.title = title;
+                        new maplibregl.Marker({ element: el })
+                            .setLngLat([lng, lat])
+                            .setPopup(title ? new maplibregl.Popup({ offset: 14, closeButton: false }).setText(title) : undefined)
+                            .addTo(map);
+                    };
+
+                    data.toilets.forEach(function (t) {
+                        var el = document.createElement('div');
+                        el.style.cssText = 'width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 3px rgba(0,0,0,.5);background:' +
+                            (t.bio ? '#10b981' : '#2563eb');
+                        addMarker(el, t.lng, t.lat, t.bio ? 'Біотуалет' : 'Громадська вбиральня');
+                    });
+
+                    data.controlPoints.forEach(function (c) {
+                        // MapLibre сам задає transform маркера, тому ромб повертаємо у вкладеному елементі
+                        var el = document.createElement('div');
+                        el.style.cssText = 'width:14px;height:14px;';
+                        var diamond = document.createElement('div');
+                        diamond.style.cssText = 'width:12px;height:12px;margin:1px;border:1.5px solid #fff;box-shadow:0 0 3px rgba(0,0,0,.5);transform:rotate(45deg);background:' +
+                            zoneColor[c.zone];
+                        el.appendChild(diamond);
+                        addMarker(el, c.lng, c.lat, c.name);
+                        bounds.extend([c.lng, c.lat]);
+                    });
+
+                    data.candidates.forEach(function (c) {
+                        var el = document.createElement('div');
+                        el.textContent = c.rank;
+                        el.style.cssText = 'width:30px;height:30px;border-radius:50%;border:3px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.5);color:#fff;font:700 14px/24px system-ui,sans-serif;text-align:center;z-index:10;background:' +
+                            (c.rank === 1 ? '#059669' : '#4f46e5');
+                        addMarker(el, c.lng, c.lat, '№' + c.rank + ' · Δ5 ' + c.d5 + ' · Δ10 ' + c.d10);
+                        bounds.extend([c.lng, c.lat]);
+                    });
+
+                    if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 50, maxZoom: 15, duration: 0 });
+                })();
+                </script>`
+}
+
+// ==========================================================
 // HTML-ЗВІТ
 // ==========================================================
 
@@ -198,12 +366,12 @@ function renderParams(summary: OptimizationSummary): string {
         title: 'Параметри симуляції',
         bodyHtml: `
                 <dl class="divide-y divide-slate-100">${[
-                    row('Сітка кандидатів', `крок ${params.gridStepDegrees}° (≈ ${Math.round(params.gridStepDegrees * 111320)} м по широті), ${summary.totalCandidates} вузлів`),
-                    row('Територія', `${params.bounds.minLatitude}–${params.bounds.maxLatitude}° пн. ш., ${params.bounds.minLongitude}–${params.bounds.maxLongitude}° сх. д.`),
-                    row('Оцінено через OSRM', `${summary.evaluatedCandidates ?? '—'} кандидатів`),
-                    row('Фільтр води', `відхилення, якщо до пішохідної мережі &gt; ${params.maxSnapDistanceMeters} м`),
-                    row('Мін. відстань до наявних', `${params.minDistanceToExistingMeters} м`),
-                ].join('')}
+            row('Сітка кандидатів', `крок ${params.gridStepDegrees}° (≈ ${Math.round(params.gridStepDegrees * 111320)} м по широті), ${summary.totalCandidates} вузлів`),
+            row('Територія', `${params.bounds.minLatitude}–${params.bounds.maxLatitude}° пн. ш., ${params.bounds.minLongitude}–${params.bounds.maxLongitude}° сх. д.`),
+            row('Оцінено через OSRM', `${summary.evaluatedCandidates ?? '—'} кандидатів`),
+            row('Фільтр води', `відхилення, якщо до пішохідної мережі &gt; ${params.maxSnapDistanceMeters} м`),
+            row('Мін. відстань до наявних', `${params.minDistanceToExistingMeters} м`),
+        ].join('')}
                 </dl>`,
     })
 }
@@ -240,18 +408,18 @@ export function exportOptimizationReportHtml(
         }),
         evaluatedPercent !== null
             ? renderKpiCard({
-                  label: 'Оцінено кандидатів',
-                  value: `${evaluated}`,
-                  color: 'blue',
-                  progressPercent: evaluatedPercent,
-                  progressNote: `з ${summary.totalCandidates} вузлів сітки`,
-              })
+                label: 'Оцінено кандидатів',
+                value: `${evaluated}`,
+                color: 'blue',
+                progressPercent: evaluatedPercent,
+                progressNote: `з ${summary.totalCandidates} вузлів сітки`,
+            })
             : renderKpiCard({
-                  label: 'Вузлів сітки',
-                  value: `${summary.totalCandidates}`,
-                  color: 'blue',
-                  sub: 'Кандидатів на перевірку',
-              }),
+                label: 'Вузлів сітки',
+                value: `${summary.totalCandidates}`,
+                color: 'blue',
+                sub: 'Кандидатів на перевірку',
+            }),
         renderKpiCard({
             label: 'Найкращий кандидат',
             value: best ? `${fmtDelta(best.deltaCoverage5)} / ${fmtDelta(best.deltaCoverage10)}` : '—',
@@ -260,7 +428,7 @@ export function exportOptimizationReportHtml(
         }),
     ])
 
-    const mapSvg = buildMapSvg(rows, toilets, accessibility)
+    const mapBlock = buildMapBlock(rows, toilets, accessibility)
 
     const legend = `<ul class="space-y-2">
                         ${legendItem('bg-emerald-600', 'Кандидат №1 (найкращий)')}
@@ -292,17 +460,17 @@ export function exportOptimizationReportHtml(
                 badge: `Кандидатів: ${summary.totalCandidates}`,
                 bodyHtml: renderTopTable(rows),
             }) +
-            (mapSvg
+            (mapBlock
                 ? renderSection({
-                      title: 'Схема розміщення',
-                      bodyHtml: `<div class="p-4">${mapSvg}</div>`,
-                  })
+                    title: 'Схема розміщення',
+                    bodyHtml: mapBlock,
+                })
                 : '') +
             renderParams(summary),
         footerHtml: renderFooterColumns(legend, notes),
     })
 
-    downloadFile(html, `optimization_report_${new Date().toISOString().slice(0, 10)}.html`, 'text/html;charset=utf-8;')
+    downloadFile(html, `optimization_report_${localFilenameDate()}.html`, 'text/html;charset=utf-8;')
 }
 
 // ==========================================================
@@ -343,5 +511,5 @@ export function exportOptimizationReportCsv(summary: OptimizationSummary, toilet
         csv += `Мін. відстань до наявних (м);${summary.params.minDistanceToExistingMeters}\n`
     }
 
-    downloadFile(csv, `optimization_report_${new Date().toISOString().slice(0, 10)}.csv`, 'text/csv;charset=utf-8;')
+    downloadFile(csv, `optimization_report_${localFilenameDate()}.csv`, 'text/csv;charset=utf-8;')
 }

@@ -1,5 +1,39 @@
+import * as turf from '@turf/turf'
 import type { AccessibilitySummary } from './accessibility'
 import type { OptimizationCandidate } from '../types/optimizationType'
+
+export function computeCandidateScore(candidate: Pick<OptimizationCandidate, 'deltaCoverage5' | 'deltaCoverage10' | 'avgWalkingDistance' | 'improvedPoints' | 'avgCircuity'>): number {
+    return (
+        candidate.deltaCoverage5 * 1.6 +
+        candidate.deltaCoverage10 * 1.2 +
+        candidate.improvedPoints * 0.8 -
+        candidate.avgWalkingDistance * 0.01 -
+        Math.max(0, candidate.avgCircuity - 1.5) * 4
+    )
+}
+
+export function greedySelectDistinctCandidates(
+    candidates: OptimizationCandidate[],
+    minSeparationMeters: number = 300
+): OptimizationCandidate[] {
+    const ranked = [...candidates].sort((a, b) => computeCandidateScore(b) - computeCandidateScore(a))
+    const selected: OptimizationCandidate[] = []
+
+    for (const candidate of ranked) {
+        const overlaps = selected.some((existing) => {
+            const dist = turf.distance(
+                turf.point([existing.longitude, existing.latitude]),
+                turf.point([candidate.longitude, candidate.latitude]),
+                { units: 'meters' }
+            )
+            return dist < minSeparationMeters
+        })
+
+        if (!overlaps) selected.push(candidate)
+    }
+
+    return selected
+}
 
 export function evaluateCandidate(
     latitude: number,
@@ -20,7 +54,7 @@ export function evaluateCandidate(
         )
     }).length
 
-    return {
+    const candidate: OptimizationCandidate = {
         latitude,
         longitude,
         coverage5: result.accessible5MinPercent,
@@ -35,7 +69,12 @@ export function evaluateCandidate(
             result.accessible10MinPercent -
             baseline.accessible10MinPercent,
         improvedPoints,
+        score: 0,
+        n: result.totalControlPoints,
     }
+
+    candidate.score = computeCandidateScore(candidate)
+    return candidate
 }
 
 export function generateCandidateGrid(
