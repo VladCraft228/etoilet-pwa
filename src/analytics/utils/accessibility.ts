@@ -1,7 +1,7 @@
 import type { Toilet } from '../../types'
 import type { ControlPoint } from '../data/controlPoints'
 import { getStraightDistance } from '../../components/utils/geo'
-import { median } from './math'
+import { median, percentile } from './math'
 
 // ==========================================================
 // TYPES
@@ -12,7 +12,10 @@ export type RouteSource = 'direct' | 'osrm' | 'fallback' | 'correction'
 export interface ControlPointAnalysisResult {
     point: ControlPoint
     nearestToilet: Toilet | null
+    /** Пряма до ОБРАНОЇ (мережево найближчої) вбиральні. */
     straightDistanceMeters: number
+    /** Пряма до найближчої за Евклідом вбиральні (для порівняння «Евклід проти мережі»). */
+    euclideanNearestMeters?: number
     walkingDistanceMeters: number
     walkingDurationSeconds: number
     circuityFactor: number
@@ -36,8 +39,22 @@ export interface AccessibilitySummary {
     medianWalkingDistanceMeters: number
     avgWalkingTimeMins: number
     medianWalkingTimeMins: number
+    /** CF рахується ЛИШЕ з маршрутів OSRM (без direct/fallback/correction). */
     avgCircuityFactor: number
     medianCircuityFactor: number
+    p90CircuityFactor?: number
+    maxCircuityFactor?: number
+    circuitySampleSize?: number
+    /** Розподіл за джерелом відстані. */
+    sourceCounts?: Record<RouteSource, number>
+    /** Покриття, якби ми рахували за прямою (Евклід ≤ 414 / 828 м). */
+    euclid5MinCount?: number
+    euclid5MinPercent?: number
+    euclid10MinCount?: number
+    euclid10MinPercent?: number
+    /** Точки, «покриті» за Евклідом, але недоступні за мережею. */
+    falseCovered5MinCount?: number
+    falseCovered10MinCount?: number
     results: ControlPointAnalysisResult[]
 }
 
@@ -46,6 +63,11 @@ export interface AccessibilityOptions {
     concurrencyLimit?: number
     bufferRadiusKm?: number
     maxRadiusMeters?: number
+    /**
+     * Прискорення для what-if: точки, чиї N найближчих вбиралень усі вже були в базовому розрахунку,
+     * беруться з нього без повторних запитів.
+     */
+    reuseBaseline?: { summary: AccessibilitySummary; knownToiletIds: Set<string> }
 }
 
 interface OsrmRouteResponse {
@@ -68,6 +90,9 @@ const FIVE_MINUTES_SECONDS = 5 * 60
 const TEN_MINUTES_SECONDS = 10 * 60
 const FALLBACK_CIRCUITY_FACTOR = 1.4 // Коефіцієнт для точок без мережевого маршруту
 const WALKING_SPEED_MPS = 1.38 // Середня швидкість пішохода м/с
+/** Пряма відстань, що відповідає 5/10 хв ходьби — для порівняння з мережею. */
+export const EUCLID_COVERAGE_5_METERS = Math.round(FIVE_MINUTES_SECONDS * WALKING_SPEED_MPS) // 414
+export const EUCLID_COVERAGE_10_METERS = Math.round(TEN_MINUTES_SECONDS * WALKING_SPEED_MPS) // 828
 
 // Поріг прямої видимості (парки, набережні, площі без розмічених стежок в OSM)
 const STRAIGHT_LINE_THRESHOLD_METERS = 180
@@ -92,6 +117,8 @@ function loadInitialOsrmCache(): Map<string, { distanceMeters: number; durationS
 }
 
 const osrmCache = loadInitialOsrmCache()
+/** Лічильник реальних HTTP-запитів: затримка потрібна лише після них, а не після влучань у кеш. */
+let networkRequestCounter = 0
 
 function persistOsrmCache(): void {
     try {
@@ -164,6 +191,7 @@ async function getRouteWithCache(
         return osrmCache.get(key)!
     }
 
+    networkRequestCounter++
     const result = await fetchOsrmRouteRaw(startLng, startLat, endLng, endLat)
     osrmCache.set(key, result)
     persistOsrmCache()
@@ -177,19 +205,13 @@ async function getRouteWithCache(
 async function processInBatches<T, R>(
     items: T[],
     batchSize: number,
-    delayMs: number,
     processor: (item: T) => Promise<R>
 ): Promise<R[]> {
     const results: R[] = []
 
     for (let i = 0; i < items.length; i += batchSize) {
         const batch = items.slice(i, i + batchSize)
-        const batchResults = await Promise.all(batch.map(processor))
-        results.push(...batchResults)
-
-        if (i + batchSize < items.length) {
-            await new Promise(resolve => setTimeout(resolve, delayMs))
-        }
+        results.push(...(await Promise.all(batch.map(processor))))
     }
 
     return results
@@ -224,7 +246,21 @@ export async function evaluateControlPointsAccessibilityNetwork(
 
     let completedCount = 0
 
+    const reuse = options.reuseBaseline
+    const baselineById = reuse ? new Map(reuse.summary.results.map((r) => [r.point.id, r])) : null
+
     const processPoint = async ({ cp, candidates }: typeof controlPointsWithCandidates[0]): Promise<ControlPointAnalysisResult> => {
+        // Набір найближчих вбиралень не змінився → результат такий самий, як у базовому розрахунку
+        if (reuse && baselineById) {
+            const prev = baselineById.get(cp.id)
+            if (prev && prev.euclideanNearestMeters !== undefined && candidates.every((c) => reuse.knownToiletIds.has(String(c.toilet.id)))) {
+                completedCount++
+                onProgress?.(completedCount, controlPoints.length, `Аналіз точки: ${cp.name}`)
+                return prev
+            }
+        }
+
+        const requestsBefore = networkRequestCounter
         let result: ControlPointAnalysisResult
 
         if (candidates.length === 0) {
@@ -233,6 +269,7 @@ export async function evaluateControlPointsAccessibilityNetwork(
                 nearestToilet: null,
                 straightDistanceMeters: 0,
                 walkingDistanceMeters: 0,
+                euclideanNearestMeters: 0,
                 walkingDurationSeconds: 0,
                 circuityFactor: 0,
                 routeSource: 'fallback',
@@ -250,6 +287,7 @@ export async function evaluateControlPointsAccessibilityNetwork(
                     point: cp,
                     nearestToilet: nearestCandidate.toilet,
                     straightDistanceMeters: nearestStraightDistance,
+                    euclideanNearestMeters: nearestStraightDistance,
                     walkingDistanceMeters: nearestStraightDistance,
                     walkingDurationSeconds: walkingDuration,
                     circuityFactor: 1.0,
@@ -285,6 +323,7 @@ export async function evaluateControlPointsAccessibilityNetwork(
                         point: cp,
                         nearestToilet: nearestCandidate.toilet,
                         straightDistanceMeters: nearestStraightDistance,
+                        euclideanNearestMeters: nearestStraightDistance,
                         walkingDistanceMeters: fallbackDistance,
                         walkingDurationSeconds: fallbackDuration,
                         circuityFactor: FALLBACK_CIRCUITY_FACTOR,
@@ -317,6 +356,7 @@ export async function evaluateControlPointsAccessibilityNetwork(
                             point: cp,
                             nearestToilet: bestResult.candidate.toilet,
                             straightDistanceMeters: chosenStraightDistance,
+                            euclideanNearestMeters: nearestStraightDistance,
                             walkingDistanceMeters: correctedDistance,
                             walkingDurationSeconds: correctedDuration,
                             circuityFactor: 1.25,
@@ -330,6 +370,7 @@ export async function evaluateControlPointsAccessibilityNetwork(
                             point: cp,
                             nearestToilet: bestResult.candidate.toilet,
                             straightDistanceMeters: chosenStraightDistance,
+                            euclideanNearestMeters: nearestStraightDistance,
                             walkingDistanceMeters: walkingDistance,
                             walkingDurationSeconds: walkingDuration,
                             circuityFactor,
@@ -343,6 +384,11 @@ export async function evaluateControlPointsAccessibilityNetwork(
             }
         }
 
+        // Пауза потрібна лише якщо ми реально звертались до OSRM (кеш і пряма видимість — без затримки)
+        if (networkRequestCounter > requestsBefore) {
+            await new Promise((resolve) => setTimeout(resolve, REQUEST_DELAY_MS))
+        }
+
         completedCount++
         onProgress?.(completedCount, controlPoints.length, `Аналіз точки: ${cp.name}`)
         return result
@@ -351,7 +397,6 @@ export async function evaluateControlPointsAccessibilityNetwork(
     const results = await processInBatches(
         controlPointsWithCandidates,
         concurrencyLimit,
-        REQUEST_DELAY_MS,
         processPoint
     )
 
@@ -397,10 +442,17 @@ function calculateSummary(totalPoints: number, results: ControlPointAnalysisResu
     const straightDistances = successfulResults.map((r) => r.straightDistanceMeters)
     const walkingDistances = successfulResults.map((r) => r.walkingDistanceMeters)
     const walkingTimes = successfulResults.map((r) => r.walkingDurationSeconds)
-    const networkLikeResults = successfulResults.filter(
-        (r) => r.routeSource === 'osrm' || r.routeSource === 'correction'
-    )
-    const circuityFactors = networkLikeResults.map((r) => r.circuityFactor)
+    // CF — лише з реальних маршрутів OSRM: direct (=1.0), fallback (1.4) і correction (1.25) є припущеннями
+    const circuityFactors = successfulResults
+        .filter((r) => r.routeSource === 'osrm')
+        .map((r) => r.circuityFactor)
+
+    const sourceCounts: Record<RouteSource, number> = { direct: 0, osrm: 0, fallback: 0, correction: 0 }
+    for (const r of successfulResults) sourceCounts[r.routeSource]++
+
+    const euclid5 = successfulResults.filter((r) => (r.euclideanNearestMeters ?? Infinity) <= EUCLID_COVERAGE_5_METERS)
+    const euclid10 = successfulResults.filter((r) => (r.euclideanNearestMeters ?? Infinity) <= EUCLID_COVERAGE_10_METERS)
+    const pct = (n: number) => Math.round((n / totalPoints) * 100)
 
     const safeAvg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length
     const safeRound = (n: number) => Math.round(n)
@@ -421,6 +473,16 @@ function calculateSummary(totalPoints: number, results: ControlPointAnalysisResu
         medianWalkingTimeMins: safeRound(median(walkingTimes) / 60),
         avgCircuityFactor: circuityFactors.length > 0 ? Number(safeAvg(circuityFactors).toFixed(2)) : 0,
         medianCircuityFactor: circuityFactors.length > 0 ? Number(median(circuityFactors).toFixed(2)) : 0,
+        p90CircuityFactor: circuityFactors.length > 0 ? Number(percentile(circuityFactors, 90).toFixed(2)) : 0,
+        maxCircuityFactor: circuityFactors.length > 0 ? Number(Math.max(...circuityFactors).toFixed(2)) : 0,
+        circuitySampleSize: circuityFactors.length,
+        sourceCounts,
+        euclid5MinCount: euclid5.length,
+        euclid5MinPercent: pct(euclid5.length),
+        euclid10MinCount: euclid10.length,
+        euclid10MinPercent: pct(euclid10.length),
+        falseCovered5MinCount: euclid5.filter((r) => !r.isAccessible5Min).length,
+        falseCovered10MinCount: euclid10.filter((r) => !r.isAccessible10Min).length,
         results
     }
 }

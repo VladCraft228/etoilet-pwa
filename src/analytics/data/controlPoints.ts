@@ -60,7 +60,7 @@ export const DNIPRO_CONTROL_POINTS: ControlPoint[] = [
     { id: 'cp-51', name: 'ж/м Покровський (Наб. Заводська)', category: 'embankment', latitude: 48.48503, longitude: 34.91701 },
     { id: 'cp-52', name: 'Парк Новокодацький (Наб. Заводська)', category: 'embankment', latitude: 48.48907, longitude: 34.93893 },
     { id: 'cp-53', name: 'Січеславська набережна', category: 'embankment', latitude: 48.47095, longitude: 35.04933 },
-    { id: 'cp-54', name: 'Набережна Перемоги (пішохідна зона)', category: 'pedestrian', latitude: 48.44121, longitude: 35.07210 },
+    { id: 'cp-54', name: 'Набережна Перемоги (пішохідна зона)', category: 'embankment', latitude: 48.44121, longitude: 35.07210 },
     { id: 'cp-55', name: 'Придніпровський парк', category: 'park', latitude: 48.39952, longitude: 35.13197 },
     { id: 'cp-56', name: 'Станція метро "Заводська"', category: 'transport', latitude: 48.47601, longitude: 34.96194 },
     { id: 'cp-57', name: 'Станція метро "Металургів"', category: 'transport', latitude: 48.47671, longitude: 34.98227 },

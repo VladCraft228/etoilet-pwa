@@ -1,38 +1,16 @@
-import * as turf from '@turf/turf'
 import type { AccessibilitySummary } from './accessibility'
 import type { OptimizationCandidate } from '../types/optimizationType'
 
-export function computeCandidateScore(candidate: Pick<OptimizationCandidate, 'deltaCoverage5' | 'deltaCoverage10' | 'avgWalkingDistance' | 'improvedPoints' | 'avgCircuity'>): number {
+export function compareOptimizationCandidates(
+    a: OptimizationCandidate,
+    b: OptimizationCandidate
+): number {
     return (
-        candidate.deltaCoverage5 * 1.6 +
-        candidate.deltaCoverage10 * 1.2 +
-        candidate.improvedPoints * 0.8 -
-        candidate.avgWalkingDistance * 0.01 -
-        Math.max(0, candidate.avgCircuity - 1.5) * 4
+        // Порівняння за кількістю точок: відсотки округлені (1 точка ≈ 1.6%), тож Δ у % «стрибає» між 1 і 2
+        (b.deltaCount5 ?? b.deltaCoverage5) - (a.deltaCount5 ?? a.deltaCoverage5) ||
+        (b.deltaCount10 ?? b.deltaCoverage10) - (a.deltaCount10 ?? a.deltaCoverage10) ||
+        (b.deltaWalkingDistance ?? 0) - (a.deltaWalkingDistance ?? 0)
     )
-}
-
-export function greedySelectDistinctCandidates(
-    candidates: OptimizationCandidate[],
-    minSeparationMeters: number = 300
-): OptimizationCandidate[] {
-    const ranked = [...candidates].sort((a, b) => computeCandidateScore(b) - computeCandidateScore(a))
-    const selected: OptimizationCandidate[] = []
-
-    for (const candidate of ranked) {
-        const overlaps = selected.some((existing) => {
-            const dist = turf.distance(
-                turf.point([existing.longitude, existing.latitude]),
-                turf.point([candidate.longitude, candidate.latitude]),
-                { units: 'meters' }
-            )
-            return dist < minSeparationMeters
-        })
-
-        if (!overlaps) selected.push(candidate)
-    }
-
-    return selected
 }
 
 export function evaluateCandidate(
@@ -69,11 +47,11 @@ export function evaluateCandidate(
             result.accessible10MinPercent -
             baseline.accessible10MinPercent,
         improvedPoints,
-        score: 0,
+        deltaWalkingDistance: baseline.avgWalkingDistanceMeters - result.avgWalkingDistanceMeters,
+        deltaCount5: result.accessible5MinCount - baseline.accessible5MinCount,
+        deltaCount10: result.accessible10MinCount - baseline.accessible10MinCount,
         n: result.totalControlPoints,
     }
-
-    candidate.score = computeCandidateScore(candidate)
     return candidate
 }
 
@@ -120,6 +98,7 @@ const SNAP_CACHE_KEY = 'etoilet_osrm_snap_cache_v1'
 export const MAX_SNAP_DISTANCE_METERS = 40
 /** Мін. відстань кандидата до вже наявної вбиральні. */
 export const MIN_DISTANCE_TO_EXISTING_METERS = 150
+const SNAP_REQUEST_DELAY_MS = 120
 
 export interface SnappedCandidate {
     latitude: number
@@ -200,6 +179,8 @@ export async function snapToWalkableNetwork(
     let cached = snapCache.get(key)
     if (cached === undefined) {
         const fetched = await fetchNearestRaw(latitude, longitude)
+        // Невелика пауза лише після реального HTTP-запиту — щоб не впиратись у ліміт публічного OSRM
+        await new Promise((r) => setTimeout(r, SNAP_REQUEST_DELAY_MS))
         if (fetched === undefined) return { latitude, longitude }
         cached = fetched
         snapCache.set(key, cached)

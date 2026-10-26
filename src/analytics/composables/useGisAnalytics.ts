@@ -14,7 +14,7 @@ import { runCandidateBenchmark } from '../utils/accessibilityBenchmark'
 import {
     evaluateCandidate,
     generateCandidateGrid,
-    greedySelectDistinctCandidates,
+    compareOptimizationCandidates,
     snapToWalkableNetwork,
     MAX_SNAP_DISTANCE_METERS,
     MIN_DISTANCE_TO_EXISTING_METERS
@@ -148,11 +148,17 @@ export function useGisAnalytics() {
         realToilets: Toilet[],
         candidates: Array<{ latitude: number; longitude: number }>,
         baseline: AccessibilitySummary,
+        selectedCandidates: OptimizationCandidate[] = [],
+        minSeparationMeters: number = 300,
         onProgress?: (p: number) => void
-    ): Promise<OptimizationCandidate[]> => {
+    ): Promise<{ ranked: OptimizationCandidate[]; evaluatedKeys: string[] }> => {
         const results: OptimizationCandidate[] = []
+        const evaluatedKeys: string[] = []
         const seenSnapped = new Set<string>()
         const total = candidates.length
+        // Кандидат змінює лише ті контрольні точки, для яких він потрапляє в N найближчих вбиралень;
+        // решта береться з baseline без жодного запиту до OSRM.
+        const knownToiletIds = new Set(realToilets.map((t) => String(t.id)))
 
         // Отримуємо список контрольних точок, які ще НЕ мали 5-хв або 10-хв доступності
         const uncoveredPoints = baseline.results.filter(
@@ -212,6 +218,17 @@ export function useGisAnalytics() {
             }
 
             const { latitude: candLat, longitude: candLng } = snapped
+            const tooCloseToSelected = selectedCandidates.some((selected) =>
+                turf.distance(
+                    snappedPoint,
+                    turf.point([selected.longitude, selected.latitude]),
+                    { units: 'meters' }
+                ) < minSeparationMeters
+            )
+            if (tooCloseToSelected) {
+                onProgress?.(Math.round(((i + 1) / total) * 100))
+                continue
+            }
 
             const virtualToilet: Toilet = {
                 id: `opt-${candLat}-${candLng}`,
@@ -224,15 +241,19 @@ export function useGisAnalytics() {
 
             const result = await evaluateControlPointsAccessibilityNetwork(
                 DNIPRO_CONTROL_POINTS,
-                [...realToilets, virtualToilet]
+                [...realToilets, virtualToilet],
+                { reuseBaseline: { summary: baseline, knownToiletIds } }
             )
 
             results.push(evaluateCandidate(candLat, candLng, baseline, result))
+            evaluatedKeys.push(snapKey)
             onProgress?.(Math.round(((i + 1) / total) * 100))
         }
 
-        const greedyResults = greedySelectDistinctCandidates(results, 300)
-        return greedyResults.sort((a, b) => b.score - a.score || b.deltaCoverage5 - a.deltaCoverage5)
+        return {
+            ranked: results.sort(compareOptimizationCandidates),
+            evaluatedKeys,
+        }
     }
 
     const runOptimizationTest = async (
@@ -256,41 +277,108 @@ export function useGisAnalytics() {
                 BOUNDS.minLatitude, BOUNDS.maxLatitude, BOUNDS.minLongitude, BOUNDS.maxLongitude, GRID_STEP
             )
 
-            const baseline = await evaluateControlPointsAccessibilityNetwork(
+            const initialToilets = getCombinedToilets(realToilets)
+            const initialBaseline = await evaluateControlPointsAccessibilityNetwork(
                 DNIPRO_CONTROL_POINTS,
-                realToilets
+                initialToilets
             )
 
-            const results = await optimizeOneToiletPlacement(
-                realToilets,
-                candidates,
-                baseline,
-                (progress) => {
-                    optimizationProgress.value = progress
-                }
-            )
+            const TARGET_COVERAGE_5_PERCENT = 80
+            const MIN_COVERAGE_GAIN_PERCENT = 1
+            const MIN_AVERAGE_DISTANCE_GAIN_METERS = 10
+            const MIN_CANDIDATE_SEPARATION_METERS = 300
+            const selectedCandidates: OptimizationCandidate[] = []
+            let currentToilets = initialToilets
+            let baseline = initialBaseline
+            let remainingCandidates = candidates
+            // Унікальні вузли сітки (після прив'язки), оцінені хоча б на одному кроці
+            const evaluatedNodes = new Set<string>()
+            let optimizationStep = 0
 
-            const top5 = results.slice(0, 5)
+            while (
+                baseline.accessible5MinPercent < TARGET_COVERAGE_5_PERCENT &&
+                remainingCandidates.length > 0
+            ) {
+                const { ranked, evaluatedKeys } = await optimizeOneToiletPlacement(
+                    currentToilets,
+                    remainingCandidates,
+                    baseline,
+                    selectedCandidates,
+                    MIN_CANDIDATE_SEPARATION_METERS,
+                    (progress) => {
+                        const progressRatio = optimizationStep + progress / 100
+                        optimizationProgress.value = Math.min(
+                            99,
+                            Math.round((progressRatio / (progressRatio + 1)) * 100)
+                        )
+                    }
+                )
+                evaluatedKeys.forEach((k) => evaluatedNodes.add(k))
+
+                const bestCandidate = ranked[0]
+                if (!bestCandidate) break
+
+                // Приріст у в. п. з точних лічильників, а не з округлених відсотків
+                const pointsToPercent = (n: number | undefined, fallback: number) =>
+                    n !== undefined && bestCandidate.n > 0 ? (n / bestCandidate.n) * 100 : fallback
+                const hasMeaningfulGain =
+                    pointsToPercent(bestCandidate.deltaCount5, bestCandidate.deltaCoverage5) >= MIN_COVERAGE_GAIN_PERCENT ||
+                    pointsToPercent(bestCandidate.deltaCount10, bestCandidate.deltaCoverage10) >= MIN_COVERAGE_GAIN_PERCENT ||
+                    (bestCandidate.deltaWalkingDistance ?? 0) >= MIN_AVERAGE_DISTANCE_GAIN_METERS
+                if (!hasMeaningfulGain) break
+
+                selectedCandidates.push(bestCandidate)
+                optimizationStep++
+                currentToilets = [
+                    ...currentToilets,
+                    {
+                        id: `opt-${bestCandidate.latitude}-${bestCandidate.longitude}`,
+                        type: 'public',
+                        status: 'virtual',
+                        latitude: bestCandidate.latitude,
+                        longitude: bestCandidate.longitude,
+                        address: `Optimization candidate ${selectedCandidates.length}`,
+                    },
+                ]
+
+                baseline = await evaluateControlPointsAccessibilityNetwork(
+                    DNIPRO_CONTROL_POINTS,
+                    currentToilets
+                )
+
+                const selectedPoint = turf.point([bestCandidate.longitude, bestCandidate.latitude])
+                remainingCandidates = remainingCandidates.filter((candidate) =>
+                    turf.distance(
+                        selectedPoint,
+                        turf.point([candidate.longitude, candidate.latitude]),
+                        { units: 'meters' }
+                    ) >= MIN_CANDIDATE_SEPARATION_METERS
+                )
+            }
+            optimizationProgress.value = 100
 
             const summary: OptimizationSummary = {
                 totalCandidates: candidates.length,
-                evaluatedCandidates: results.length,
+                evaluatedCandidates: evaluatedNodes.size,
                 generatedAt: new Date().toISOString(),
                 params: {
                     gridStepDegrees: GRID_STEP,
                     bounds: BOUNDS,
                     maxSnapDistanceMeters: MAX_SNAP_DISTANCE_METERS,
                     minDistanceToExistingMeters: MIN_DISTANCE_TO_EXISTING_METERS,
+                    minCandidateSeparationMeters: MIN_CANDIDATE_SEPARATION_METERS,
+                    targetCoverage5Percent: TARGET_COVERAGE_5_PERCENT,
+                    minCoverageGainPercent: MIN_COVERAGE_GAIN_PERCENT,
+                    minAverageDistanceGainMeters: MIN_AVERAGE_DISTANCE_GAIN_METERS,
                 },
                 baseline: {
-                    coverage5: baseline.accessible5MinPercent,
-                    coverage10: baseline.accessible10MinPercent,
-                    avgWalkingDistance: baseline.avgWalkingDistanceMeters,
+                    coverage5: initialBaseline.accessible5MinPercent,
+                    coverage10: initialBaseline.accessible10MinPercent,
+                    avgWalkingDistance: initialBaseline.avgWalkingDistanceMeters,
                 },
-                bestCandidate: top5[0] ?? null,
-                topCandidates: top5,
+                bestCandidate: selectedCandidates[0] ?? null,
+                topCandidates: selectedCandidates,
             }
-
 
             optimizationSummary.value = summary
             saveToStorage(CACHE_KEYS.OPTIMIZATION, summary)
@@ -299,7 +387,6 @@ export function useGisAnalytics() {
             console.error('❌ Помилка під час симуляції оптимізації:', error)
             return null
         } finally {
-            console.groupEnd()
             isOptimizing.value = false
             isOptimizationOutdated.value = false
         }

@@ -1504,9 +1504,9 @@ const cancelRelocating = () => {
 // 1. Стейт вибраного кандидата
 const selectedCandidateIndex = ref<number | null>(null)
 
-// 2. TOP-5 кандидатів для OptimizationLayer та AnalyticsPanel
+// 2. Обрані кроки оптимізації для OptimizationLayer та AnalyticsPanel
 const topCandidates = computed<OptimizationCandidate[]>(() => {
-  return optimizationSummary.value?.topCandidates?.slice(0, 5) || []
+  return optimizationSummary.value?.topCandidates ?? []
 })
 
 // 3. Обробник вибору кандидата (з таблиці або маркера)

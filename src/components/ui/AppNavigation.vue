@@ -88,7 +88,7 @@ const handleLogout = () => {
                 <span class="material-symbols-outlined text-indigo-600 text-[22px]">analytics</span>
                 <div>
                   <p class="text-xs font-bold text-slate-800 leading-tight">ГІС-аналітика</p>
-                  <p class="text-[10px] text-slate-400">Шар буферів та ТОП-5</p>
+                  <p class="text-[10px] text-slate-400">Шар буферів та оптимізація</p>
                 </div>
               </div>
 

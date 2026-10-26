@@ -1,5 +1,5 @@
 import type { ControlPoint } from '../data/controlPoints'
-import type { ControlPointAnalysisResult } from './accessibility'
+import { EUCLID_COVERAGE_5_METERS, EUCLID_COVERAGE_10_METERS, type ControlPointAnalysisResult } from './accessibility'
 import { average, median } from './math'
 
 export interface CategoryAccessibilityStats {
@@ -12,8 +12,11 @@ export interface CategoryAccessibilityStats {
     medianStraight: number
     avgWalking: number
     medianWalking: number
-    avgCircuity: number
-    medianCircuity: number
+    /** CF лише з маршрутів OSRM; null, якщо у категорії немає жодного такого маршруту. */
+    avgCircuity: number | null
+    medianCircuity: number | null
+    /** Скільки маршрутів OSRM увійшло до CF. */
+    circuitySampleSize: number
 
     // Часові метрики
     avgTime: number
@@ -24,6 +27,10 @@ export interface CategoryAccessibilityStats {
     coverage10: number // % точок <= 10 хв (до 800м)
     coverage5Ci95: [number, number]
     coverage10Ci95: [number, number]
+
+    // Покриття за прямою (Евклід ≤ 414 / 828 м) — для порівняння з мережею
+    euclidCoverage5: number
+    euclidCoverage10: number
 }
 
 function proportion95Ci(pct: number, n: number): [number, number] {
@@ -54,10 +61,11 @@ export function calculateCategoryAccessibilityStats(
         const straightDistances = categoryResults.map(r => r.straightDistanceMeters)
         const walkingDistances = categoryResults.map(r => r.walkingDistanceMeters)
         const walkingTimes = categoryResults.map(r => r.walkingDurationSeconds)
-        const networkLikeResults = categoryResults.filter(
-            r => r.routeSource === 'osrm' || r.routeSource === 'correction'
-        )
-        const circuityFactors = networkLikeResults.map(r => r.circuityFactor)
+        // Лише реальні маршрути OSRM: direct/fallback/correction — припущення, а не вимірювання
+        const circuityFactors = categoryResults
+            .filter(r => r.routeSource === 'osrm')
+            .map(r => r.circuityFactor)
+        const share = (cnt: number) => (categoryResults.length > 0 ? (cnt / categoryResults.length) * 100 : 0)
 
         const accessible5 = categoryResults.filter(r => r.isAccessible5Min).length
         const accessible10 = categoryResults.filter(r => r.isAccessible10Min).length
@@ -74,8 +82,11 @@ export function calculateCategoryAccessibilityStats(
             medianWalking: median(walkingDistances),
             avgTime: average(walkingTimes),
             medianTime: median(walkingTimes),
-            avgCircuity: circuityFactors.length > 0 ? average(circuityFactors) : 0,
-            medianCircuity: circuityFactors.length > 0 ? median(circuityFactors) : 0,
+            avgCircuity: circuityFactors.length > 0 ? average(circuityFactors) : null,
+            medianCircuity: circuityFactors.length > 0 ? median(circuityFactors) : null,
+            circuitySampleSize: circuityFactors.length,
+            euclidCoverage5: share(categoryResults.filter(r => (r.euclideanNearestMeters ?? Infinity) <= EUCLID_COVERAGE_5_METERS).length),
+            euclidCoverage10: share(categoryResults.filter(r => (r.euclideanNearestMeters ?? Infinity) <= EUCLID_COVERAGE_10_METERS).length),
             coverage5,
             coverage10,
             coverage5Ci95: proportion95Ci(coverage5, categoryResults.length),

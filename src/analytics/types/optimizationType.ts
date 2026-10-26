@@ -9,7 +9,11 @@ export interface OptimizationCandidate {
     avgWalkingTime: number
     avgCircuity: number
     improvedPoints: number
-    score: number
+    /** Зменшення середньої довжини маршруту відносно baseline поточного кроку, м. */
+    deltaWalkingDistance?: number
+    /** Скільки контрольних точок додатково стали доступні за 5 / 10 хв (без округлення відсотків). */
+    deltaCount5?: number
+    deltaCount10?: number
     n: number
 }
 
@@ -18,6 +22,10 @@ export interface OptimizationParams {
     bounds: { minLatitude: number; maxLatitude: number; minLongitude: number; maxLongitude: number }
     maxSnapDistanceMeters: number
     minDistanceToExistingMeters: number
+    minCandidateSeparationMeters?: number
+    targetCoverage5Percent?: number
+    minCoverageGainPercent?: number
+    minAverageDistanceGainMeters?: number
 }
 
 export interface OptimizationSummary {

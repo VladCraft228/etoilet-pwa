@@ -117,7 +117,7 @@ function buildMapSvg(
         )
     }
 
-    // Кандидати ТОП-5
+    // Обрані кроки оптимізації
     for (const row of rows) {
         const cx = x(row.candidate.longitude).toFixed(1)
         const cy = y(row.candidate.latitude).toFixed(1)
@@ -320,6 +320,7 @@ function renderTopTable(rows: ReportRow[]): string {
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-emerald-600 font-semibold text-right font-mono">${fmtDelta(r.candidate.deltaCoverage5)}</td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-emerald-600 font-semibold text-right font-mono">${fmtDelta(r.candidate.deltaCoverage10)}</td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-mono">${Number(r.candidate.coverage5.toFixed(1))}% / ${Number(r.candidate.coverage10.toFixed(1))}%</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-emerald-700 text-right font-mono">${(r.candidate.deltaWalkingDistance ?? 0) >= 0 ? '+' : ''}${Math.round(r.candidate.deltaWalkingDistance ?? 0)}</td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-right font-mono">${r.candidate.improvedPoints}</td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-semibold text-right font-mono">${Math.round(r.candidate.avgWalkingDistance)}</td>
                                 <td class="px-6 py-4 text-sm text-gray-600 text-right">
@@ -340,6 +341,7 @@ function renderTopTable(rows: ReportRow[]): string {
                                 <th scope="col" class="${TH_RIGHT}">Δ 5 хв</th>
                                 <th scope="col" class="${TH_RIGHT}">Δ 10 хв</th>
                                 <th scope="col" class="${TH_RIGHT}">Покриття 5 / 10 хв</th>
+                                <th scope="col" class="${TH_RIGHT}">Δ сер. відстані (м)</th>
                                 <th scope="col" class="${TH_RIGHT}">Покращено точок</th>
                                 <th scope="col" class="${TH_RIGHT}">Сер. відстань (м)</th>
                                 <th scope="col" class="${TH_RIGHT}">До найближчої наявної (м)</th>
@@ -371,6 +373,10 @@ function renderParams(summary: OptimizationSummary): string {
             row('Оцінено через OSRM', `${summary.evaluatedCandidates ?? '—'} кандидатів`),
             row('Фільтр води', `відхилення, якщо до пішохідної мережі &gt; ${params.maxSnapDistanceMeters} м`),
             row('Мін. відстань до наявних', `${params.minDistanceToExistingMeters} м`),
+            ...(params.minCandidateSeparationMeters != null ? [row('Мін. відстань між обраними кандидатами', `${params.minCandidateSeparationMeters} м`)] : []),
+            ...(params.targetCoverage5Percent != null ? [row('Ціль покриття за 5 хв', `${params.targetCoverage5Percent}%`)] : []),
+            ...(params.minCoverageGainPercent != null ? [row('Мін. приріст покриття', `${params.minCoverageGainPercent}% за 5 або 10 хв`)] : []),
+            ...(params.minAverageDistanceGainMeters != null ? [row('Мін. зменшення середньої відстані', `${params.minAverageDistanceGainMeters} м`)] : []),
         ].join('')}
                 </dl>`,
     })
@@ -385,7 +391,8 @@ export function exportOptimizationReportHtml(
     const generated = summary.generatedAt ? new Date(summary.generatedAt) : new Date()
     const dateStr = generated.toLocaleDateString('uk-UA')
     const timeStr = generated.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })
-    const best = rows[0]?.candidate
+    const last = rows[rows.length - 1]?.candidate
+    const target = summary.params?.targetCoverage5Percent
 
     const evaluated = summary.evaluatedCandidates
     const evaluatedPercent =
@@ -421,18 +428,22 @@ export function exportOptimizationReportHtml(
                 sub: 'Кандидатів на перевірку',
             }),
         renderKpiCard({
-            label: 'Найкращий кандидат',
-            value: best ? `${fmtDelta(best.deltaCoverage5)} / ${fmtDelta(best.deltaCoverage10)}` : '—',
+            label: 'Підсумок симуляції',
+            value: last
+                ? `${Number(summary.baseline.coverage5.toFixed(1))}% → ${Number(last.coverage5.toFixed(1))}%`
+                : 'без змін',
             color: 'amber',
-            sub: 'Приріст покриття 5 / 10 хв',
+            sub: last
+                ? `Покриття 5 хв після ${rows.length} ${rows.length === 1 ? 'вбиральні' : 'вбиралень'}; 10 хв: ${Number(last.coverage10.toFixed(1))}%${target != null ? ` · ціль ${target}% ${last.coverage5 >= target ? 'досягнуто' : 'не досягнуто'}` : ''}`
+                : 'Жоден кандидат не дає суттєвого приросту',
         }),
     ])
 
     const mapBlock = buildMapBlock(rows, toilets, accessibility)
 
     const legend = `<ul class="space-y-2">
-                        ${legendItem('bg-emerald-600', 'Кандидат №1 (найкращий)')}
-                        ${legendItem('bg-indigo-600', 'Кандидати 2–5')}
+                        ${legendItem('bg-emerald-600', 'Крок №1 (перша додана вбиральня)')}
+                        ${legendItem('bg-indigo-600', 'Кроки №2 і далі')}
                         ${legendItem('bg-blue-600', 'Наявні громадські вбиральні')}
                         ${legendItem('bg-emerald-500', 'Наявні біотуалети')}
                         ${legendItem('bg-green-500', 'Контрольна точка ≤ 5 хв')}
@@ -440,24 +451,20 @@ export function exportOptimizationReportHtml(
                         ${legendItem('bg-red-500', 'Контрольна точка &gt; 10 хв')}
                     </ul>`
 
-    const onePointPercent = accessibility?.totalControlPoints
-        ? Number((100 / accessibility.totalControlPoints).toFixed(1))
-        : null
-
-    const notes = `<p class="mb-2"><strong>Δ (дельта):</strong> різниця покриття відносно базового стану. ${onePointPercent !== null ? `Одна контрольна точка дає ≈ ${onePointPercent}% покриття, тому` : 'Тому'} кандидати з однаковою Δ розрізняються лише додатковими критеріями (Δ10, сер. відстань).</p>
+    const notes = `<p class="mb-2"><strong>Δ (дельта):</strong> зміна метрик відносно baseline на поточному кроці. На кожному кроці кандидати ранжуються лексикографічно за ΔC5, ΔC10 і Δd (зменшення середньої відстані).</p>
                     <p class="mb-2"><strong>Покращено точок:</strong> кількість контрольних точок, для яких пішохідна відстань до найближчої вбиральні зменшилась.</p>
-                    <p>Для кожного вузла сітки (після прив'язки до пішохідної мережі OSRM) додається віртуальна вбиральня й повторно рахується доступність усіх контрольних точок.</p>
+                    <p>Послідовно обирається найкращий кандидат, додається до моделі як вбиральня та перераховується baseline. Пошук зупиняється після досягнення цілі покриття або коли приріст стає меншим за заданий поріг.</p>
                     <p class="mt-2 text-xs italic">* Результат залежить від набору контрольних точок і якості пішохідного графа OSM; перед встановленням перевірте місце на місцевості.</p>`
 
     const html = renderReportPage({
         title: 'Звіт оптимізації розміщення вбиральень',
         heading: '📍 Оптимізація розміщення міських вбиральень',
-        subtitleHtml: `Звіт сформовано: <span class="font-medium text-slate-700">${dateStr}, ${timeStr}</span> · симуляція «що, якщо» для однієї нової вбиральні`,
+        subtitleHtml: `Звіт сформовано: <span class="font-medium text-slate-700">${dateStr}, ${timeStr}</span> · багатокрокова симуляція «що, якщо»`,
         bodyHtml:
             kpis +
             renderSection({
-                title: `ТОП-${rows.length} місць для нової вбиральні`,
-                badge: `Кандидатів: ${summary.totalCandidates}`,
+                title: `Рекомендовані місця для нових вбиралень (${rows.length} ${rows.length === 1 ? 'крок' : 'кроків'})`,
+                badge: `Вузлів сітки: ${summary.totalCandidates}`,
                 bodyHtml: renderTopTable(rows),
             }) +
             (mapBlock
@@ -483,7 +490,7 @@ export function exportOptimizationReportCsv(summary: OptimizationSummary, toilet
 
     let csv = '﻿'
     csv += [
-        '№', 'Широта', 'Довгота', 'Δ покриття 5 хв (%)', 'Δ покриття 10 хв (%)',
+        '№', 'Широта', 'Довгота', 'Δ покриття 5 хв (%)', 'Δ покриття 10 хв (%)', 'Δ сер. відстані (м)',
         'Покриття 5 хв (%)', 'Покриття 10 хв (%)', 'Покращено точок',
         'Сер. відстань ходу (м)', 'Сер. час ходу (хв)', 'Сер. CF',
         'До найближчої наявної (м)', 'Найближча наявна', 'Посилання',
@@ -492,7 +499,7 @@ export function exportOptimizationReportCsv(summary: OptimizationSummary, toilet
     for (const r of rows) {
         const c = r.candidate
         csv += [
-            r.rank, c.latitude, c.longitude, c.deltaCoverage5, c.deltaCoverage10,
+            r.rank, c.latitude, c.longitude, c.deltaCoverage5, c.deltaCoverage10, Math.round(c.deltaWalkingDistance ?? 0),
             c.coverage5, c.coverage10, c.improvedPoints,
             Math.round(c.avgWalkingDistance), c.avgWalkingTime, c.avgCircuity,
             r.distanceToNearestExistingM ?? '', q(r.nearestExistingName), mapsLink(c),
@@ -509,6 +516,10 @@ export function exportOptimizationReportCsv(summary: OptimizationSummary, toilet
         csv += `Крок сітки;${summary.params.gridStepDegrees}\n`
         csv += `Макс. відстань до мережі (м);${summary.params.maxSnapDistanceMeters}\n`
         csv += `Мін. відстань до наявних (м);${summary.params.minDistanceToExistingMeters}\n`
+        if (summary.params.minCandidateSeparationMeters != null) csv += `Мін. відстань між обраними кандидатами (м);${summary.params.minCandidateSeparationMeters}\n`
+        if (summary.params.targetCoverage5Percent != null) csv += `Ціль покриття за 5 хв (%);${summary.params.targetCoverage5Percent}\n`
+        if (summary.params.minCoverageGainPercent != null) csv += `Мін. приріст покриття (%);${summary.params.minCoverageGainPercent}\n`
+        if (summary.params.minAverageDistanceGainMeters != null) csv += `Мін. зменшення середньої відстані (м);${summary.params.minAverageDistanceGainMeters}\n`
     }
 
     downloadFile(csv, `optimization_report_${localFilenameDate()}.csv`, 'text/csv;charset=utf-8;')

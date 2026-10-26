@@ -1,6 +1,12 @@
 import type { Toilet } from '../../types'
 import type { ControlPoint } from '../data/controlPoints'
-import type { AccessibilitySummary, ControlPointAnalysisResult, RouteSource } from './accessibility'
+import {
+    EUCLID_COVERAGE_5_METERS,
+    EUCLID_COVERAGE_10_METERS,
+    type AccessibilitySummary,
+    type ControlPointAnalysisResult,
+    type RouteSource,
+} from './accessibility'
 import { calculateCategoryAccessibilityStats } from './categoryStats'
 import { downloadFile, escapeHtml } from './download'
 import {
@@ -36,6 +42,14 @@ const ROUTE_SOURCE_LABELS: Record<RouteSource, string> = {
     correction: 'Корекція',
 }
 
+/** Старі результати з localStorage можуть не мати routeSource — показуємо тире замість «undefined». */
+const sourceLabel = (r: ControlPointAnalysisResult) => ROUTE_SOURCE_LABELS[r.routeSource] ?? '—'
+
+/** Чи містить розрахунок поля, потрібні для порівняння «Евклід проти мережі». */
+const hasProvenance = (summary: AccessibilitySummary) =>
+    summary.results.length > 0 &&
+    summary.results.every((r) => r.routeSource !== undefined && (!r.analyzed || r.euclideanNearestMeters !== undefined))
+
 const localFilenameDate = () => new Date().toLocaleDateString('sv-SE')
 
 /** Читабельна назва вбиральні: адреса або «Тип · короткий id». */
@@ -57,7 +71,7 @@ export function exportAccessibilityResultsCsv(
 
     csv += [
         'ID', 'Назва', 'Категорія', 'Широта', 'Довгота',
-        'Найближча вбиральня', 'Евклідова відстань (м)',
+        'Найближча вбиральня', 'Пряма до обраної (м)', 'Пряма до найближчої за Евклідом (м)',
         'Пішохідна відстань (м)', 'Час (с)', 'Час (хв)',
         'Circuity Factor', 'Джерело маршруту', 'Доступно 5 хв', 'Доступно 10 хв', 'Статус'
     ].join(';') + '\n'
@@ -78,11 +92,12 @@ export function exportAccessibilityResultsCsv(
             point.longitude,
             safeToilet,
             result.straightDistanceMeters,
+            result.euclideanNearestMeters ?? '',
             result.walkingDistanceMeters,
             result.walkingDurationSeconds,
             walkingTimeMin,
             result.circuityFactor,
-            ROUTE_SOURCE_LABELS[result.routeSource],
+            sourceLabel(result),
             result.isAccessible5Min ? 'Так' : 'Ні',
             result.isAccessible10Min ? 'Так' : 'Ні',
             result.analyzed ? 'OK' : 'FAIL'
@@ -97,6 +112,15 @@ export function exportAccessibilityResultsCsv(
     csv += `Помилки;${summary.failedControlPoints}\n`
     csv += `Покриття 5 хв;${summary.accessible5MinPercent}%\n`
     csv += `Покриття 10 хв;${summary.accessible10MinPercent}%\n`
+    if (summary.circuitySampleSize !== undefined) {
+        csv += `CF (лише OSRM): n;${summary.circuitySampleSize}\n`
+        csv += `CF середній;${summary.avgCircuityFactor}\n`
+        csv += `CF медіана;${summary.medianCircuityFactor}\n`
+        csv += `CF P90;${summary.p90CircuityFactor ?? ''}\n`
+        csv += `CF макс;${summary.maxCircuityFactor ?? ''}\n`
+        csv += `Покриття 5 хв за Евклідом (≤${EUCLID_COVERAGE_5_METERS} м);${summary.euclid5MinPercent ?? ''}%\n`
+        csv += `Покриття 10 хв за Евклідом (≤${EUCLID_COVERAGE_10_METERS} м);${summary.euclid10MinPercent ?? ''}%\n`
+    }
     csv += `Середній час ходу;${summary.avgWalkingTimeMins} хв\n`
     csv += `Медіанний час ходу;${summary.medianWalkingTimeMins} хв\n`
 
@@ -141,6 +165,7 @@ function renderZoneRows(rows: ControlPointAnalysisResult[]): string {
                                 <td class="${TD} text-gray-900 font-semibold text-right font-mono">${r.walkingDistanceMeters}</td>
                                 <td class="${TD} text-gray-900 text-right font-mono">${(r.walkingDurationSeconds / 60).toFixed(1)}</td>
                                 <td class="${TD} text-gray-600 text-right font-mono">${r.circuityFactor.toFixed(2)}</td>
+                                <td class="${TD} text-gray-500 text-right">${sourceLabel(r)}</td>
                             </tr>`
         })
         .join('')
@@ -160,6 +185,7 @@ function renderZoneTable(rows: ControlPointAnalysisResult[]): string {
                                 <th scope="col" class="${TH_RIGHT}">Маршрут (м)</th>
                                 <th scope="col" class="${TH_RIGHT}">Час (хв)</th>
                                 <th scope="col" class="${TH_RIGHT}">CF</th>
+                                <th scope="col" class="${TH_RIGHT}">Джерело</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-200 bg-white">${renderZoneRows(rows)}
@@ -168,32 +194,67 @@ function renderZoneTable(rows: ControlPointAnalysisResult[]): string {
                 </div>`
 }
 
-function renderEuclideanVsNetworkTable(rows: ControlPointAnalysisResult[]): string {
+function renderEuclideanVsNetworkTable(summary: AccessibilitySummary): string {
+    const rows = summary.results.filter((r) => r.analyzed)
     if (rows.length === 0) return ''
 
-    const body = rows
-        .slice()
-        .sort((a, b) => b.walkingDistanceMeters - a.walkingDistanceMeters)
-        .map((r) => {
-            const delta = r.walkingDistanceMeters - r.straightDistanceMeters
-            const deltaLabel = `${delta >= 0 ? '+' : ''}${delta} м`
+    if (!hasProvenance(summary)) {
+        return renderSection({
+            title: 'Евклід проти мережі',
+            tone: 'amber',
+            bodyHtml: `<div class="p-6 text-sm text-amber-800">Цей розрахунок збережено старою версією застосунку (немає джерела маршруту та найближчої за Евклідом відстані). Натисніть «Оновити» в панелі аналітики й сформуйте звіт знову.</div>`,
+        })
+    }
 
+    const total = summary.totalControlPoints
+    const cmp = (label: string, eucl: number | undefined, euclPct: number | undefined, net: number, netPct: number, falseCnt: number | undefined) => `
+                            <tr>
+                                <td class="${TD} font-medium text-gray-900">${label}</td>
+                                <td class="${TD} text-right font-mono text-gray-600">${eucl ?? '—'} (${euclPct ?? '—'}%)</td>
+                                <td class="${TD} text-right font-mono text-gray-900 font-semibold">${net} (${netPct}%)</td>
+                                <td class="${TD} text-right font-mono ${falseCnt ? 'text-red-600 font-semibold' : 'text-emerald-600'}">${falseCnt ?? '—'}</td>
+                            </tr>`
+
+    const coverageTable = `
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200">
+                        <thead class="bg-slate-50">
+                            <tr>
+                                <th scope="col" class="${TH_LEFT}">Поріг</th>
+                                <th scope="col" class="${TH_RIGHT}">За Евклідом (з ${total})</th>
+                                <th scope="col" class="${TH_RIGHT}">За мережею (з ${total})</th>
+                                <th scope="col" class="${TH_RIGHT}">Хибно покриті</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 bg-white">${cmp(`5 хв (≤ ${EUCLID_COVERAGE_5_METERS} м)`, summary.euclid5MinCount, summary.euclid5MinPercent, summary.accessible5MinCount, summary.accessible5MinPercent, summary.falseCovered5MinCount)}${cmp(`10 хв (≤ ${EUCLID_COVERAGE_10_METERS} м)`, summary.euclid10MinCount, summary.euclid10MinPercent, summary.accessible10MinCount, summary.accessible10MinPercent, summary.falseCovered10MinCount)}
+                        </tbody>
+                    </table>
+                </div>`
+
+    // «Хибно покриті»: Евклід каже «досяжно за 5 хв», а реальний маршрут довший
+    const falseCovered = rows
+        .filter((r) => (r.euclideanNearestMeters ?? Infinity) <= EUCLID_COVERAGE_5_METERS && !r.isAccessible5Min)
+        .sort((a, b) => b.walkingDistanceMeters - a.walkingDistanceMeters)
+
+    const falseRows = falseCovered
+        .map((r) => {
+            const eu = r.euclideanNearestMeters ?? 0
             return `
                             <tr class="hover:bg-gray-50 transition-colors duration-150">
                                 <td class="${TD} font-medium text-gray-900">${escapeHtml(r.point.id)}</td>
                                 <td class="${TD} text-gray-700 max-w-xs truncate" title="${escapeHtml(r.point.name)}">${escapeHtml(r.point.name)}</td>
-                                <td class="${TD} text-right font-mono text-gray-600">${r.straightDistanceMeters}</td>
+                                <td class="${TD} text-right font-mono text-gray-600">${eu}</td>
                                 <td class="${TD} text-right font-mono text-gray-900 font-semibold">${r.walkingDistanceMeters}</td>
-                                <td class="${TD} text-right font-mono ${delta > 0 ? 'text-amber-600' : 'text-emerald-600'}">${deltaLabel}</td>
-                                <td class="${TD} text-right font-mono text-gray-600">${ROUTE_SOURCE_LABELS[r.routeSource]}</td>
+                                <td class="${TD} text-right font-mono text-amber-600">+${r.walkingDistanceMeters - eu} м</td>
+                                <td class="${TD} text-right text-gray-500">${sourceLabel(r)}</td>
                             </tr>`
         })
         .join('')
 
-    return renderSection({
-        title: 'Евклід проти мережі',
-        badge: `${rows.length} точок`,
-        bodyHtml: `
+    const falseBlock =
+        falseCovered.length > 0
+            ? `
+                <div class="px-6 py-3 bg-red-50 border-t border-red-100 text-sm font-semibold text-red-900">Точки, які Евклід вважає «5 хв», а мережа — ні (${falseCovered.length})</div>
                 <div class="overflow-x-auto">
                     <table class="min-w-full divide-y divide-slate-200">
                         <thead class="bg-slate-50">
@@ -206,10 +267,16 @@ function renderEuclideanVsNetworkTable(rows: ControlPointAnalysisResult[]): stri
                                 <th scope="col" class="${TH_RIGHT}">Джерело</th>
                             </tr>
                         </thead>
-                        <tbody class="divide-y divide-slate-200 bg-white">${body}
+                        <tbody class="divide-y divide-slate-200 bg-white">${falseRows}
                         </tbody>
                     </table>
-                </div>`,
+                </div>`
+            : `<div class="px-6 py-3 border-t border-slate-100 text-sm text-emerald-700">Жодна точка не є «хибно покритою» за порогом 5 хв.</div>`
+
+    return renderSection({
+        title: 'Евклід проти мережі',
+        badge: `${rows.length} точок`,
+        bodyHtml: coverageTable + falseBlock,
     })
 }
 
@@ -232,7 +299,9 @@ function renderCategorySection(summary: AccessibilitySummary): string {
                                 <td class="${TD} text-gray-600 text-right font-mono">${ciText(s.coverage10Ci95)}</td>
                                 <td class="${TD} text-gray-600 text-right font-mono">${(s.avgTime / 60).toFixed(1)}</td>
                                 <td class="${TD} text-gray-600 text-right font-mono">${(s.medianTime / 60).toFixed(1)}</td>
-                                <td class="${TD} text-gray-600 text-right font-mono">${s.avgCircuity.toFixed(2)}</td>
+                                <td class="${TD} text-gray-600 text-right font-mono">${pct(s.euclidCoverage5)}</td>
+                                <td class="${TD} text-gray-600 text-right font-mono">${s.avgCircuity !== null ? s.avgCircuity.toFixed(2) : '—'}</td>
+                                <td class="${TD} text-gray-500 text-right font-mono">${s.circuitySampleSize}</td>
                             </tr>`
         )
         .join('')
@@ -253,7 +322,9 @@ function renderCategorySection(summary: AccessibilitySummary): string {
                                 <th scope="col" class="${TH_RIGHT}">95% CI 10 хв</th>
                                 <th scope="col" class="${TH_RIGHT}">Сер. час (хв)</th>
                                 <th scope="col" class="${TH_RIGHT}">Медіана (хв)</th>
+                                <th scope="col" class="${TH_RIGHT}">5 хв (Евклід)</th>
                                 <th scope="col" class="${TH_RIGHT}">Сер. CF</th>
+                                <th scope="col" class="${TH_RIGHT}">n (CF)</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-200 bg-white">${rows}
@@ -295,10 +366,13 @@ export function exportAccessibilityReportHtml(
             progressNote: `${summary.failedControlPoints} помилок`,
         }),
         renderKpiCard({
-            label: 'Circuity Factor',
-            value: `${summary.avgCircuityFactor}`,
+            label: 'Circuity Factor (OSRM)',
+            value: summary.circuitySampleSize === 0 ? '—' : `${summary.avgCircuityFactor}`,
             color: 'amber',
-            sub: 'Середнє відхилення маршруту',
+            sub:
+                summary.circuitySampleSize !== undefined
+                    ? `n=${summary.circuitySampleSize} · медіана ${summary.medianCircuityFactor} · P90 ${summary.p90CircuityFactor} · макс ${summary.maxCircuityFactor}`
+                    : 'Середнє відхилення маршруту',
         }),
     ])
 
@@ -328,14 +402,14 @@ export function exportAccessibilityReportHtml(
                     </ul>`
 
     const notes = `<p class="mb-2"><strong>CF (Circuity Factor):</strong> Відношення довжини пішохідного маршруту до прямої відстані. Чим ближче до 1.0, тим пряміший шлях.</p>
-                    <p>Маршрутизація виконана через OSRM (профіль пішохода); розглянуто ${maxCandidates} найближчих вбиральні для кожної точки. CF підраховується лише для маршрутів OSRM/корекції; прямі відстані та fallback не включаються в середнє.</p>
+                    <p>Маршрутизація виконана через OSRM (профіль пішохода); розглянуто ${maxCandidates} найближчих вбиральні для кожної точки. CF підраховується лише за реальними маршрутами OSRM; прямі відстані (CF=1), fallback (×1.4) і корекція (×1.25) у статистику CF не входять.</p>
                     <p class="mt-2 text-xs italic">* Для точок у межах прямої видимості (≤ 180 м) використовується direct route; якщо OSRM не зміг прокласти маршрут, застосовується fallback; для аномальних мережевих відхилень залишено лише захист від розриву графа.</p>`
 
     const html = renderReportPage({
         title: 'Звіт доступності вбиральень',
         heading: '🚽 Аналіз доступності міських вбиральень',
         subtitleHtml: `Звіт сформовано: <span class="font-medium text-slate-700">${dateStr}</span>`,
-        bodyHtml: kpis + renderCategorySection(summary) + renderEuclideanVsNetworkTable(summary.results) + zoneSections,
+        bodyHtml: kpis + renderCategorySection(summary) + renderEuclideanVsNetworkTable(summary) + zoneSections,
         footerHtml: renderFooterColumns(legend, notes),
     })
 

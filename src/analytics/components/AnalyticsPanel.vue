@@ -45,7 +45,7 @@ const categoryStats = computed(() => {
 
 const topCandidates = computed<OptimizationCandidate[]>(() => {
   if (!props.optimizationSummary?.topCandidates) return []
-  return props.optimizationSummary.topCandidates.slice(0, 5)
+  return props.optimizationSummary.topCandidates
 })
 
 const emit = defineEmits<{
@@ -252,7 +252,7 @@ const radiusOptions = [
             </div>
             <div class="text-center border-l border-indigo-100">
               <div class="text-[9px] text-slate-500 uppercase">Circuity Factor</div>
-              <div class="text-lg font-bold text-amber-600">{{ accessibilityStats.medianCircuityFactor }}</div>
+              <div class="text-lg font-bold text-amber-600">{{ accessibilityStats.circuitySampleSize === 0 ? '—' : accessibilityStats.medianCircuityFactor }}</div>
             </div>
           </div>
 
@@ -303,7 +303,7 @@ const radiusOptions = [
                   <td class="p-1 font-medium text-slate-700">{{ stat.category }}</td>
                   <td class="p-1 text-center text-indigo-600 font-bold">{{ Math.round(stat.coverage5) }}%</td>
                   <td class="p-1 text-center text-amber-600 font-semibold">{{ Math.round(stat.coverage10) }}%</td>
-                  <td class="p-1 text-right text-slate-600">{{ stat.avgCircuity.toFixed(2) }}</td>
+                  <td class="p-1 text-right text-slate-600">{{ stat.avgCircuity != null ? stat.avgCircuity.toFixed(2) : '—' }}</td>
                 </tr>
                 </tbody>
               </table>
@@ -410,18 +410,18 @@ const radiusOptions = [
 
           <div v-else class="space-y-2">
             <div class="text-[9px] text-amber-800 bg-amber-100/50 p-1.5 rounded border border-amber-200 flex justify-between items-center">
-              <span>Знайдено {{ optimizationSummary.totalCandidates }} кандидатів.</span>
-              <span class="font-bold">ТОП-5 найкращих:</span>
+              <span>Обрано {{ optimizationSummary.topCandidates.length }} точок · ціль {{ optimizationSummary.params?.targetCoverage5Percent ?? 80 }}% за 5 хв.</span>
+              <span class="font-bold">Кроки за порядком:</span>
             </div>
 
-            <div class="overflow-x-auto rounded-lg border border-amber-200/80 bg-white shadow-sm">
+            <div class="overflow-auto max-h-56 rounded-lg border border-amber-200/80 bg-white shadow-sm">
               <table class="w-full text-[9px] text-left">
-                <thead class="bg-amber-100/50 text-amber-900 border-b border-amber-200/60 font-semibold">
+                <thead class="sticky top-0 bg-amber-100  text-amber-900 border-b border-amber-200/60 font-semibold">
                 <tr>
                   <th class="p-1 text-center">№</th>
                   <th class="p-1 text-center">Δ5</th>
                   <th class="p-1 text-center">Δ10</th>
-                  <th class="p-1 text-right">Відст.</th>
+                  <th class="p-1 text-right">Δd</th>
                 </tr>
                 </thead>
                 <tbody class="divide-y divide-amber-100">
@@ -446,7 +446,7 @@ const radiusOptions = [
                     +{{ cand.deltaCoverage10 }}%
                   </td>
                   <td class="p-1 text-right text-slate-600">
-                    {{ Math.round(cand.avgWalkingDistance) }}м
+                    {{ Math.round(cand.deltaWalkingDistance ?? 0) }}м
                   </td>
                 </tr>
                 </tbody>
