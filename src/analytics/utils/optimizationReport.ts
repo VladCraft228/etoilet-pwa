@@ -2,6 +2,7 @@ import * as turf from '@turf/turf'
 import type { Toilet } from '../../types'
 import type { AccessibilitySummary } from './accessibility'
 import type { OptimizationCandidate, OptimizationSummary } from '../types/optimizationType'
+import { categoryLabel } from './accessibilityReport'
 import { downloadFile, escapeHtml } from './download'
 import {
     TH_LEFT,
@@ -52,6 +53,21 @@ function buildRows(summary: OptimizationSummary, toilets: Toilet[]): ReportRow[]
 }
 
 const fmtDelta = (v: number) => `${v > 0 ? '+' : ''}${Number(v.toFixed(1))}%`
+const coord = (v: number) => Number(v.toFixed(5))
+
+const STOP_REASON_LABELS: Record<NonNullable<OptimizationSummary['stopReason']>, string> = {
+    'target-reached': 'досягнуто ціль покриття за 5 хв',
+    'no-gain': 'подальші кандидати не дають приросту покриття за 5 хв',
+    'max-steps': 'досягнуто ліміт кроків',
+    'no-candidates': 'не залишилось придатних кандидатів',
+}
+
+/** Δ у точках (точно) та у в. п. (без накопичення помилки округлення відсотків). */
+function fmtDeltaPoints(count: number | undefined, n: number, roundedPercent: number): string {
+    if (count === undefined || n <= 0) return fmtDelta(roundedPercent)
+    const pct = Number(((count / n) * 100).toFixed(1))
+    return `${count > 0 ? '+' : ''}${count}т.(${count > 0 ? '+' : ''}${pct}%)`
+}
 const mapsLink = (c: OptimizationCandidate) =>
     `https://www.google.com/maps?q=${c.latitude.toFixed(6)},${c.longitude.toFixed(6)}`
 
@@ -170,8 +186,8 @@ function buildMapPayload(
             rank: r.rank,
             lat: r.candidate.latitude,
             lng: r.candidate.longitude,
-            d5: fmtDelta(r.candidate.deltaCoverage5),
-            d10: fmtDelta(r.candidate.deltaCoverage10),
+            d5: fmtDeltaPoints(r.candidate.deltaCount5, r.candidate.n, r.candidate.deltaCoverage5),
+            d10: fmtDeltaPoints(r.candidate.deltaCount10, r.candidate.n, r.candidate.deltaCoverage10),
         })),
         toilets: toilets
             .filter(
@@ -317,8 +333,8 @@ function renderTopTable(rows: ReportRow[]): string {
                             <tr class="hover:bg-gray-50 transition-colors duration-150">
                                 <td class="px-6 py-4 whitespace-nowrap text-sm">${rankBadge}</td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-indigo-600 font-mono"><a href="${mapsLink(r.candidate)}" target="_blank" rel="noopener" class="hover:underline">${r.candidate.latitude.toFixed(5)}, ${r.candidate.longitude.toFixed(5)}</a></td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-emerald-600 font-semibold text-right font-mono">${fmtDelta(r.candidate.deltaCoverage5)}</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-emerald-600 font-semibold text-right font-mono">${fmtDelta(r.candidate.deltaCoverage10)}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-emerald-600 font-semibold text-right font-mono">${fmtDeltaPoints(r.candidate.deltaCount5, r.candidate.n, r.candidate.deltaCoverage5)}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-emerald-600 font-semibold text-right font-mono">${fmtDeltaPoints(r.candidate.deltaCount10, r.candidate.n, r.candidate.deltaCoverage10)}</td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-mono">${Number(r.candidate.coverage5.toFixed(1))}% / ${Number(r.candidate.coverage10.toFixed(1))}%</td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-emerald-700 text-right font-mono">${(r.candidate.deltaWalkingDistance ?? 0) >= 0 ? '+' : ''}${Math.round(r.candidate.deltaWalkingDistance ?? 0)}</td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-right font-mono">${r.candidate.improvedPoints}</td>
@@ -354,6 +370,60 @@ function renderTopTable(rows: ReportRow[]): string {
                 ${rows.length === 0 ? '<div class="p-10 text-center text-slate-500">Немає кандидатів для відображення</div>' : ''}`
 }
 
+function renderCategoryImpact(summary: OptimizationSummary): string {
+    const impact = summary.categoryImpact
+    if (!impact || impact.length === 0) return ''
+
+    const cell = (count: number, n: number) => `${count}/${n} (${n > 0 ? Math.round((count / n) * 100) : 0}%)`
+    const delta = (a: number, b: number) => {
+        const d = b - a
+        return `<span class="${d > 0 ? 'text-emerald-600 font-semibold' : 'text-slate-400'}">${d > 0 ? '+' : ''}${d}т.</span>`
+    }
+    const TDC = 'px-6 py-3 whitespace-nowrap text-sm text-right font-mono'
+
+    const rows = impact
+        .slice()
+        .sort((a, b) => a.before5 / a.n - b.before5 / b.n)
+        .map(
+            (c) => `
+                            <tr class="hover:bg-gray-50 transition-colors duration-150">
+                                <td class="px-6 py-3 whitespace-nowrap text-sm font-medium text-gray-900">${escapeHtml(categoryLabel(c.category))}</td>
+                                <td class="${TDC} text-gray-600">${c.n}</td>
+                                <td class="${TDC} text-gray-600">${cell(c.before5, c.n)}</td>
+                                <td class="${TDC} text-gray-900 font-semibold">${cell(c.after5, c.n)}</td>
+                                <td class="${TDC}">${delta(c.before5, c.after5)}</td>
+                                <td class="${TDC} text-gray-600">${cell(c.before10, c.n)}</td>
+                                <td class="${TDC} text-gray-900 font-semibold">${cell(c.after10, c.n)}</td>
+                                <td class="${TDC}">${delta(c.before10, c.after10)}</td>
+                            </tr>`
+        )
+        .join('')
+
+    return renderSection({
+        title: 'Вплив на покриття за категоріями',
+        badge: `${impact.length} категорій`,
+        bodyHtml: `
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200">
+                        <thead class="bg-slate-50">
+                            <tr>
+                                <th scope="col" class="${TH_LEFT}">Категорія</th>
+                                <th scope="col" class="${TH_RIGHT}">n</th>
+                                <th scope="col" class="${TH_RIGHT}">5 хв до</th>
+                                <th scope="col" class="${TH_RIGHT}">5 хв після</th>
+                                <th scope="col" class="${TH_RIGHT}">Δ</th>
+                                <th scope="col" class="${TH_RIGHT}">10 хв до</th>
+                                <th scope="col" class="${TH_RIGHT}">10 хв після</th>
+                                <th scope="col" class="${TH_RIGHT}">Δ</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 bg-white">${rows}
+                        </tbody>
+                    </table>
+                </div>`,
+    })
+}
+
 function renderParams(summary: OptimizationSummary): string {
     const params = summary.params
     if (!params) return ''
@@ -368,15 +438,17 @@ function renderParams(summary: OptimizationSummary): string {
         title: 'Параметри симуляції',
         bodyHtml: `
                 <dl class="divide-y divide-slate-100">${[
-            row('Сітка кандидатів', `крок ${params.gridStepDegrees}° (≈ ${Math.round(params.gridStepDegrees * 111320)} м по широті), ${summary.totalCandidates} вузлів`),
-            row('Територія', `${params.bounds.minLatitude}–${params.bounds.maxLatitude}° пн. ш., ${params.bounds.minLongitude}–${params.bounds.maxLongitude}° сх. д.`),
+            row('Кандидати', `груба сітка (крок ${params.gridStepDegrees}° ≈ ${Math.round(params.gridStepDegrees * 111320)} м)${params.deficitRingRadiiMeters ? ` + кільця ${params.deficitRingRadiiMeters.join(' / ')} м навколо точок, що досі &gt; 5 хв` : ''}; усього ${summary.totalCandidates} вузлів`),
+            row('Територія', `${coord(params.bounds.minLatitude)}–${coord(params.bounds.maxLatitude)}° пн. ш., ${coord(params.bounds.minLongitude)}–${coord(params.bounds.maxLongitude)}° сх. д.`),
             row('Оцінено через OSRM', `${summary.evaluatedCandidates ?? '—'} кандидатів`),
             row('Фільтр води', `відхилення, якщо до пішохідної мережі &gt; ${params.maxSnapDistanceMeters} м`),
             row('Мін. відстань до наявних', `${params.minDistanceToExistingMeters} м`),
             ...(params.minCandidateSeparationMeters != null ? [row('Мін. відстань між обраними кандидатами', `${params.minCandidateSeparationMeters} м`)] : []),
             ...(params.targetCoverage5Percent != null ? [row('Ціль покриття за 5 хв', `${params.targetCoverage5Percent}%`)] : []),
-            ...(params.minCoverageGainPercent != null ? [row('Мін. приріст покриття', `${params.minCoverageGainPercent}% за 5 або 10 хв`)] : []),
-            ...(params.minAverageDistanceGainMeters != null ? [row('Мін. зменшення середньої відстані', `${params.minAverageDistanceGainMeters} м`)] : []),
+            ...(params.minCoverageGainPercent != null ? [row('Мін. приріст покриття за 5 хв', `${params.minCoverageGainPercent} в. п. на крок`)] : []),
+            ...(params.mode ? [row('Режим', params.mode === 'per-category' ? 'кожна категорія ≥ ' + (params.targetCoverage5Percent ?? 80) + '% за 5 хв' : 'загальне покриття ≥ ' + (params.targetCoverage5Percent ?? 80) + '% за 5 хв')] : []),
+            ...(params.maxSteps != null ? [row('Макс. кроків', `${params.maxSteps}`)] : []),
+            ...(summary.stopReason ? [row('Причина зупинки', STOP_REASON_LABELS[summary.stopReason])] : []),
         ].join('')}
                 </dl>`,
     })
@@ -400,6 +472,17 @@ export function exportOptimizationReportHtml(
             ? Math.round((evaluated / summary.totalCandidates) * 100)
             : null
 
+    const perCategory = summary.params?.mode === 'per-category'
+    const categoriesReached = (summary.categoryImpact ?? []).every(
+        (c) => c.n === 0 || (c.after5 / c.n) * 100 >= (target ?? 80)
+    )
+    const goalText =
+        target == null
+            ? ''
+            : perCategory
+              ? ` · ціль ${target}% у кожній категорії ${categoriesReached ? 'досягнуто' : 'не досягнуто'}`
+              : ` · ціль ${target}% ${last && last.coverage5 >= target ? 'досягнуто' : 'не досягнуто'}`
+
     const kpis = renderKpiGrid([
         renderKpiCard({
             label: 'Базове покриття 5 хв',
@@ -419,10 +502,10 @@ export function exportOptimizationReportHtml(
                 value: `${evaluated}`,
                 color: 'blue',
                 progressPercent: evaluatedPercent,
-                progressNote: `з ${summary.totalCandidates} вузлів сітки`,
+                progressNote: `з ${summary.totalCandidates} кандидатних вузлів`,
             })
             : renderKpiCard({
-                label: 'Вузлів сітки',
+                label: 'Кандидатних вузлів',
                 value: `${summary.totalCandidates}`,
                 color: 'blue',
                 sub: 'Кандидатів на перевірку',
@@ -434,7 +517,7 @@ export function exportOptimizationReportHtml(
                 : 'без змін',
             color: 'amber',
             sub: last
-                ? `Покриття 5 хв після ${rows.length} ${rows.length === 1 ? 'вбиральні' : 'вбиралень'}; 10 хв: ${Number(last.coverage10.toFixed(1))}%${target != null ? ` · ціль ${target}% ${last.coverage5 >= target ? 'досягнуто' : 'не досягнуто'}` : ''}`
+                ? `Покриття 5 хв після ${rows.length} ${rows.length === 1 ? 'вбиральні' : 'вбиралень'}; 10 хв: ${Number(last.coverage10.toFixed(1))}%${goalText}`
                 : 'Жоден кандидат не дає суттєвого приросту',
         }),
     ])
@@ -453,7 +536,7 @@ export function exportOptimizationReportHtml(
 
     const notes = `<p class="mb-2"><strong>Δ (дельта):</strong> зміна метрик відносно baseline на поточному кроці. На кожному кроці кандидати ранжуються лексикографічно за ΔC5, ΔC10 і Δd (зменшення середньої відстані).</p>
                     <p class="mb-2"><strong>Покращено точок:</strong> кількість контрольних точок, для яких пішохідна відстань до найближчої вбиральні зменшилась.</p>
-                    <p>Послідовно обирається найкращий кандидат, додається до моделі як вбиральня та перераховується baseline. Пошук зупиняється після досягнення цілі покриття або коли приріст стає меншим за заданий поріг.</p>
+                    <p>Послідовно обирається найкращий кандидат, додається до моделі як вбиральня та перераховується baseline. Кандидати — груба сітка плюс кільця навколо контрольних точок, що ще далі за 5 хв. У режимі «кожна категорія» кандидати спершу ранжуються за кількістю нових точок ≤ 5 хв у категоріях, що ще нижче цілі. Пошук зупиняється, коли досягнуто ціль покриття, приріст за 5 хв стає меншим за поріг або вичерпано ліміт кроків. Час ходьби скрізь = відстань / 1.38 м/с.</p>
                     <p class="mt-2 text-xs italic">* Результат залежить від набору контрольних точок і якості пішохідного графа OSM; перед встановленням перевірте місце на місцевості.</p>`
 
     const html = renderReportPage({
@@ -464,9 +547,10 @@ export function exportOptimizationReportHtml(
             kpis +
             renderSection({
                 title: `Рекомендовані місця для нових вбиралень (${rows.length} ${rows.length === 1 ? 'крок' : 'кроків'})`,
-                badge: `Вузлів сітки: ${summary.totalCandidates}`,
+                badge: `Кандидатних вузлів: ${summary.totalCandidates}`,
                 bodyHtml: renderTopTable(rows),
             }) +
+            renderCategoryImpact(summary) +
             (mapBlock
                 ? renderSection({
                     title: 'Схема розміщення',
@@ -490,7 +574,7 @@ export function exportOptimizationReportCsv(summary: OptimizationSummary, toilet
 
     let csv = '﻿'
     csv += [
-        '№', 'Широта', 'Довгота', 'Δ покриття 5 хв (%)', 'Δ покриття 10 хв (%)', 'Δ сер. відстані (м)',
+        '№', 'Широта', 'Довгота', 'Δ покриття 5 хв (%)', 'Δ покриття 10 хв (%)', 'Δ точок 5 хв', 'Δ точок 10 хв', 'Δ сер. відстані (м)',
         'Покриття 5 хв (%)', 'Покриття 10 хв (%)', 'Покращено точок',
         'Сер. відстань ходу (м)', 'Сер. час ходу (хв)', 'Сер. CF',
         'До найближчої наявної (м)', 'Найближча наявна', 'Посилання',
@@ -499,7 +583,7 @@ export function exportOptimizationReportCsv(summary: OptimizationSummary, toilet
     for (const r of rows) {
         const c = r.candidate
         csv += [
-            r.rank, c.latitude, c.longitude, c.deltaCoverage5, c.deltaCoverage10, Math.round(c.deltaWalkingDistance ?? 0),
+            r.rank, c.latitude, c.longitude, c.deltaCoverage5, c.deltaCoverage10, c.deltaCount5 ?? '', c.deltaCount10 ?? '', Math.round(c.deltaWalkingDistance ?? 0),
             c.coverage5, c.coverage10, c.improvedPoints,
             Math.round(c.avgWalkingDistance), c.avgWalkingTime, c.avgCircuity,
             r.distanceToNearestExistingM ?? '', q(r.nearestExistingName), mapsLink(c),
@@ -510,7 +594,7 @@ export function exportOptimizationReportCsv(summary: OptimizationSummary, toilet
     csv += `Базове покриття 5 хв;${summary.baseline.coverage5}%\n`
     csv += `Базове покриття 10 хв;${summary.baseline.coverage10}%\n`
     csv += `Базова сер. відстань;${Math.round(summary.baseline.avgWalkingDistance)} м\n`
-    csv += `Вузлів сітки;${summary.totalCandidates}\n`
+    csv += `Кандидатних вузлів;${summary.totalCandidates}\n`
     csv += `Оцінено через OSRM;${summary.evaluatedCandidates ?? ''}\n`
     if (summary.params) {
         csv += `Крок сітки;${summary.params.gridStepDegrees}\n`
@@ -519,7 +603,18 @@ export function exportOptimizationReportCsv(summary: OptimizationSummary, toilet
         if (summary.params.minCandidateSeparationMeters != null) csv += `Мін. відстань між обраними кандидатами (м);${summary.params.minCandidateSeparationMeters}\n`
         if (summary.params.targetCoverage5Percent != null) csv += `Ціль покриття за 5 хв (%);${summary.params.targetCoverage5Percent}\n`
         if (summary.params.minCoverageGainPercent != null) csv += `Мін. приріст покриття (%);${summary.params.minCoverageGainPercent}\n`
-        if (summary.params.minAverageDistanceGainMeters != null) csv += `Мін. зменшення середньої відстані (м);${summary.params.minAverageDistanceGainMeters}\n`
+        if (summary.params.deficitRingRadiiMeters) csv += `Кільця навколо дефіцитних точок (м);${summary.params.deficitRingRadiiMeters.join('/')}\n`
+        if (summary.params.mode) csv += `Режим;${summary.params.mode === 'per-category' ? 'кожна категорія' : 'загальне покриття'}\n`
+        if (summary.params.maxSteps != null) csv += `Макс. кроків;${summary.params.maxSteps}\n`
+        if (summary.stopReason) csv += `Причина зупинки;${STOP_REASON_LABELS[summary.stopReason]}\n`
+    }
+
+    if (summary.categoryImpact?.length) {
+        csv += '\nВПЛИВ НА КАТЕГОРІЇ;\n'
+        csv += 'Категорія;n;5 хв до;5 хв після;10 хв до;10 хв після\n'
+        for (const c of summary.categoryImpact) {
+            csv += `${categoryLabel(c.category)};${c.n};${c.before5};${c.after5};${c.before10};${c.after10}\n`
+        }
     }
 
     downloadFile(csv, `optimization_report_${localFilenameDate()}.csv`, 'text/csv;charset=utf-8;')

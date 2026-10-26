@@ -14,12 +14,16 @@ import { runCandidateBenchmark } from '../utils/accessibilityBenchmark'
 import {
     evaluateCandidate,
     generateCandidateGrid,
+    generateDeficitCandidates,
     compareOptimizationCandidates,
+    computeCategoryImpact,
+    getDeficientCategories,
     snapToWalkableNetwork,
     MAX_SNAP_DISTANCE_METERS,
     MIN_DISTANCE_TO_EXISTING_METERS
 } from '../utils/optimization'
-import type { OptimizationCandidate, OptimizationSummary } from '../types/optimizationType'
+import type { ControlPoint } from '../data/controlPoints'
+import type { OptimizationCandidate, OptimizationMode, OptimizationSummary } from '../types/optimizationType'
 
 // ==========================================
 // 1. УТИЛІТИ КЕШУВАННЯ В LOCALSTORAGE
@@ -150,6 +154,7 @@ export function useGisAnalytics() {
         baseline: AccessibilitySummary,
         selectedCandidates: OptimizationCandidate[] = [],
         minSeparationMeters: number = 300,
+        priorityCategories: ReadonlySet<ControlPoint['category']> | null = null,
         onProgress?: (p: number) => void
     ): Promise<{ ranked: OptimizationCandidate[]; evaluatedKeys: string[] }> => {
         const results: OptimizationCandidate[] = []
@@ -245,7 +250,7 @@ export function useGisAnalytics() {
                 { reuseBaseline: { summary: baseline, knownToiletIds } }
             )
 
-            results.push(evaluateCandidate(candLat, candLng, baseline, result))
+            results.push(evaluateCandidate(candLat, candLng, baseline, result, priorityCategories))
             evaluatedKeys.push(snapKey)
             onProgress?.(Math.round(((i + 1) / total) * 100))
         }
@@ -257,7 +262,8 @@ export function useGisAnalytics() {
     }
 
     const runOptimizationTest = async (
-        realToilets: Toilet[]
+        realToilets: Toilet[],
+        mode: OptimizationMode = 'overall'
     ): Promise<OptimizationSummary | null> => {
         isOptimizing.value = true
         optimizationProgress.value = 0
@@ -285,26 +291,55 @@ export function useGisAnalytics() {
 
             const TARGET_COVERAGE_5_PERCENT = 80
             const MIN_COVERAGE_GAIN_PERCENT = 1
-            const MIN_AVERAGE_DISTANCE_GAIN_METERS = 10
+            const DEFICIT_RING_RADII_METERS = [120, 250]
+            const MAX_OPTIMIZATION_STEPS = 15
             const MIN_CANDIDATE_SEPARATION_METERS = 300
             const selectedCandidates: OptimizationCandidate[] = []
             let currentToilets = initialToilets
             let baseline = initialBaseline
-            let remainingCandidates = candidates
+            const allCandidateKeys = new Set(candidates.map((c) => `${c.latitude.toFixed(6)},${c.longitude.toFixed(6)}`))
+            let stopReason: NonNullable<OptimizationSummary['stopReason']> = 'no-candidates'
             // Унікальні вузли сітки (після прив'язки), оцінені хоча б на одному кроці
             const evaluatedNodes = new Set<string>()
             let optimizationStep = 0
 
-            while (
-                baseline.accessible5MinPercent < TARGET_COVERAGE_5_PERCENT &&
-                remainingCandidates.length > 0
-            ) {
+            while (true) {
+                // overall: ціль за загальним покриттям; per-category: кожна категорія має досягти цілі
+                const priorityCategories =
+                    mode === 'per-category' ? getDeficientCategories(baseline, TARGET_COVERAGE_5_PERCENT) : null
+                const targetReached =
+                    priorityCategories !== null
+                        ? priorityCategories.size === 0
+                        : baseline.accessible5MinPercent >= TARGET_COVERAGE_5_PERCENT
+                if (targetReached) {
+                    stopReason = 'target-reached'
+                    break
+                }
+                if (selectedCandidates.length >= MAX_OPTIMIZATION_STEPS) {
+                    stopReason = 'max-steps'
+                    break
+                }
+
+                // Кандидати цього кроку: груба сітка + кільця навколо точок, що досі > 5 хв
+                const deficitPoints = baseline.results
+                    .filter(
+                        (r) =>
+                            r.analyzed &&
+                            !r.isAccessible5Min &&
+                            (priorityCategories === null || priorityCategories.has(r.point.category))
+                    )
+                    .map((r) => ({ latitude: r.point.latitude, longitude: r.point.longitude }))
+                const deficitCandidates = generateDeficitCandidates(deficitPoints, DEFICIT_RING_RADII_METERS)
+                const roundCandidates = [...candidates, ...deficitCandidates]
+                roundCandidates.forEach((c) => allCandidateKeys.add(`${c.latitude.toFixed(6)},${c.longitude.toFixed(6)}`))
+
                 const { ranked, evaluatedKeys } = await optimizeOneToiletPlacement(
                     currentToilets,
-                    remainingCandidates,
+                    roundCandidates,
                     baseline,
                     selectedCandidates,
                     MIN_CANDIDATE_SEPARATION_METERS,
+                    priorityCategories,
                     (progress) => {
                         const progressRatio = optimizationStep + progress / 100
                         optimizationProgress.value = Math.min(
@@ -316,16 +351,25 @@ export function useGisAnalytics() {
                 evaluatedKeys.forEach((k) => evaluatedNodes.add(k))
 
                 const bestCandidate = ranked[0]
-                if (!bestCandidate) break
+                if (!bestCandidate) {
+                    stopReason = 'no-candidates'
+                    break
+                }
 
-                // Приріст у в. п. з точних лічильників, а не з округлених відсотків
-                const pointsToPercent = (n: number | undefined, fallback: number) =>
-                    n !== undefined && bestCandidate.n > 0 ? (n / bestCandidate.n) * 100 : fallback
-                const hasMeaningfulGain =
-                    pointsToPercent(bestCandidate.deltaCount5, bestCandidate.deltaCoverage5) >= MIN_COVERAGE_GAIN_PERCENT ||
-                    pointsToPercent(bestCandidate.deltaCount10, bestCandidate.deltaCoverage10) >= MIN_COVERAGE_GAIN_PERCENT ||
-                    (bestCandidate.deltaWalkingDistance ?? 0) >= MIN_AVERAGE_DISTANCE_GAIN_METERS
-                if (!hasMeaningfulGain) break
+                // Приріст за 5 хв у в. п. з точного лічильника точок, а не з округлених відсотків.
+                // Кроки без приросту за 5 хв не додаємо: вони лише «підтягують» 10-хв покриття далеко від цілі.
+                const gain5Percent =
+                    bestCandidate.deltaCount5 !== undefined && bestCandidate.n > 0
+                        ? (bestCandidate.deltaCount5 / bestCandidate.n) * 100
+                        : bestCandidate.deltaCoverage5
+                const hasGain =
+                    mode === 'per-category'
+                        ? (bestCandidate.deltaPriorityCount5 ?? 0) >= 1
+                        : gain5Percent >= MIN_COVERAGE_GAIN_PERCENT
+                if (!hasGain) {
+                    stopReason = 'no-gain'
+                    break
+                }
 
                 selectedCandidates.push(bestCandidate)
                 optimizationStep++
@@ -345,22 +389,14 @@ export function useGisAnalytics() {
                     DNIPRO_CONTROL_POINTS,
                     currentToilets
                 )
-
-                const selectedPoint = turf.point([bestCandidate.longitude, bestCandidate.latitude])
-                remainingCandidates = remainingCandidates.filter((candidate) =>
-                    turf.distance(
-                        selectedPoint,
-                        turf.point([candidate.longitude, candidate.latitude]),
-                        { units: 'meters' }
-                    ) >= MIN_CANDIDATE_SEPARATION_METERS
-                )
             }
             optimizationProgress.value = 100
 
             const summary: OptimizationSummary = {
-                totalCandidates: candidates.length,
+                totalCandidates: allCandidateKeys.size,
                 evaluatedCandidates: evaluatedNodes.size,
                 generatedAt: new Date().toISOString(),
+                stopReason,
                 params: {
                     gridStepDegrees: GRID_STEP,
                     bounds: BOUNDS,
@@ -369,13 +405,16 @@ export function useGisAnalytics() {
                     minCandidateSeparationMeters: MIN_CANDIDATE_SEPARATION_METERS,
                     targetCoverage5Percent: TARGET_COVERAGE_5_PERCENT,
                     minCoverageGainPercent: MIN_COVERAGE_GAIN_PERCENT,
-                    minAverageDistanceGainMeters: MIN_AVERAGE_DISTANCE_GAIN_METERS,
+                    deficitRingRadiiMeters: DEFICIT_RING_RADII_METERS,
+                    maxSteps: MAX_OPTIMIZATION_STEPS,
+                    mode,
                 },
                 baseline: {
                     coverage5: initialBaseline.accessible5MinPercent,
                     coverage10: initialBaseline.accessible10MinPercent,
                     avgWalkingDistance: initialBaseline.avgWalkingDistanceMeters,
                 },
+                categoryImpact: computeCategoryImpact(initialBaseline, baseline),
                 bestCandidate: selectedCandidates[0] ?? null,
                 topCandidates: selectedCandidates,
             }

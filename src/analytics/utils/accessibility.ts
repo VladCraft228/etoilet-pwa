@@ -45,6 +45,8 @@ export interface AccessibilitySummary {
     p90CircuityFactor?: number
     maxCircuityFactor?: number
     circuitySampleSize?: number
+    /** Модель часу: 'distance' = відстань / 1.38 м/с для всіх джерел. Відсутнє у старих результатах (час OSRM). */
+    timeModel?: 'distance'
     /** Розподіл за джерелом відстані. */
     sourceCounts?: Record<RouteSource, number>
     /** Покриття, якби ми рахували за прямою (Евклід ≤ 414 / 828 м). */
@@ -343,7 +345,9 @@ export async function evaluateControlPointsAccessibilityNetwork(
                     )
 
                     let walkingDistance = bestResult.route.distanceMeters
-                    let walkingDuration = bestResult.route.durationSeconds
+                    // Час завжди = відстань / 1.38 м/с (як для direct/fallback/корекції); власний час OSRM
+                    // (~1.25 м/с + штрафи) давав іншу швидкість і несумісні пороги 5/10 хв.
+                    let walkingDuration = Math.round(walkingDistance / WALKING_SPEED_MPS)
                     let circuityFactor = chosenStraightDistance > 0
                         ? Number((walkingDistance / chosenStraightDistance).toFixed(2))
                         : 1
@@ -476,6 +480,7 @@ function calculateSummary(totalPoints: number, results: ControlPointAnalysisResu
         p90CircuityFactor: circuityFactors.length > 0 ? Number(percentile(circuityFactors, 90).toFixed(2)) : 0,
         maxCircuityFactor: circuityFactors.length > 0 ? Number(Math.max(...circuityFactors).toFixed(2)) : 0,
         circuitySampleSize: circuityFactors.length,
+        timeModel: 'distance',
         sourceCounts,
         euclid5MinCount: euclid5.length,
         euclid5MinPercent: pct(euclid5.length),

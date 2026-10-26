@@ -22,9 +22,9 @@ export interface CategoryAccessibilityStats {
     avgTime: number
     medianTime: number
 
-    // Фіксовані стандарти доступності (400м / 800м)
-    coverage5: number  // % точок <= 5 хв (до 400м)
-    coverage10: number // % точок <= 10 хв (до 800м)
+    // Стандарти доступності: 5 хв ≈ 414 м, 10 хв ≈ 828 м (1.38 м/с)
+    coverage5: number  // % точок <= 5 хв (≈ 414 м)
+    coverage10: number // % точок <= 10 хв (≈ 828 м)
     coverage5Ci95: [number, number]
     coverage10Ci95: [number, number]
 

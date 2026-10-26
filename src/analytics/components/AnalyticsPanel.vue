@@ -3,7 +3,7 @@ import { ref, computed, watch } from 'vue'
 import type { Toilet } from '../../types'
 import type { ControlPoint } from '../data/controlPoints'
 import type { AccessibilitySummary } from '../utils/accessibility'
-import type { OptimizationSummary, OptimizationCandidate } from '../types/optimizationType'
+import type { OptimizationSummary, OptimizationCandidate, OptimizationMode } from '../types/optimizationType'
 import { calculateCategoryAccessibilityStats } from '../utils/categoryStats'
 
 const props = defineProps<{
@@ -29,6 +29,14 @@ const props = defineProps<{
 }>()
 
 const isCollapsed = ref(false)
+
+// Дві кнопки запуску: режим обирається самим натисканням «Знайти дефіцитні зони»
+const optimizationModes: Array<{ value: OptimizationMode; label: string; short: string; hint: string }> = [
+  { value: 'overall', label: 'Загальне покриття', short: '80% по всіх точках', hint: 'Ціль 80% за 5 хв по всіх контрольних точках' },
+  { value: 'per-category', label: 'Кожна категорія', short: 'кожна категорія ≥ 80%', hint: 'Кожна категорія має досягти 80% за 5 хв' },
+]
+// Режим останнього збереженого результату («Оновити» повторює його)
+const lastOptimizationMode = computed<OptimizationMode>(() => props.optimizationSummary?.params?.mode ?? 'overall')
 const isRadiusChangedSinceLastCalc = ref(false)
 
 // Відстежуємо зміну радіусу лише якщо вже є результати аналізу
@@ -59,7 +67,7 @@ const emit = defineEmits<{
   (e: 'remove-virtual', id: string): void
   (e: 'clear-virtual'): void
   (e: 'calculate-network'): void
-  (e: 'run-optimization'): void
+  (e: 'run-optimization', mode: OptimizationMode): void
   (e: 'select-candidate', candidate: OptimizationCandidate, index: number): void
   (e: 'show-candidate', lat: number, lng: number): void
   (e: 'toggle-category', category: ControlPoint['category']): void
@@ -368,8 +376,8 @@ const radiusOptions = [
           <button
               v-if="optimizationSummary && !isOptimizing"
               type="button"
-              @click="emit('run-optimization')"
-              title="Повторити симуляцію"
+              @click="emit('run-optimization', lastOptimizationMode)"
+              title="Повторити симуляцію в тому ж режимі"
               class="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 bg-amber-200/70 hover:bg-amber-300/80 text-amber-900 rounded font-semibold transition-all cursor-pointer"
           >
             <span class="material-symbols-outlined text-[12px]">refresh</span>
@@ -385,6 +393,31 @@ const radiusOptions = [
           <span>Мережу змінено! Рекомендується оновити оптимізацію.</span>
         </div>
 
+        <div v-if="!isOptimizing" class="space-y-1">
+          <div v-if="!optimizationSummary" class="flex items-center gap-1 text-[10px] font-semibold text-amber-900">
+            <span class="material-symbols-outlined text-[14px] text-amber-600">tune</span>
+            <span>Знайти дефіцитні зони:</span>
+          </div>
+          <div class="grid grid-cols-2 gap-1.5">
+            <button
+                v-for="m in optimizationModes"
+                :key="m.value"
+                type="button"
+                :title="m.hint"
+                @click="emit('run-optimization', m.value)"
+                :class="[
+                  'flex flex-col items-center justify-center gap-0.5 px-1.5 py-1.5 rounded-lg border text-center transition-all shadow-sm cursor-pointer',
+                  optimizationSummary && lastOptimizationMode === m.value
+                    ? 'bg-amber-500 border-amber-600 text-white'
+                    : 'bg-white border-amber-300 text-amber-900 hover:bg-amber-100'
+                ]"
+            >
+              <span class="text-[10px] font-bold leading-tight">{{ m.label }}</span>
+              <span class="text-[8px] leading-tight opacity-80">{{ m.short }}</span>
+            </button>
+          </div>
+        </div>
+
         <div v-if="isOptimizing" class="space-y-1 py-1">
           <div class="w-full bg-amber-200/60 rounded-full h-1.5 overflow-hidden">
             <div
@@ -398,17 +431,7 @@ const radiusOptions = [
         </div>
 
         <template v-else>
-          <button
-              v-if="!optimizationSummary"
-              type="button"
-              @click="emit('run-optimization')"
-              class="w-full py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-lg text-[11px] transition-all shadow-sm flex items-center justify-center gap-1 cursor-pointer"
-          >
-            <span class="material-symbols-outlined text-[15px]">tune</span>
-            <span>Знайти дефіцитні зони</span>
-          </button>
-
-          <div v-else class="space-y-2">
+          <div v-if="optimizationSummary" class="space-y-2">
             <div class="text-[9px] text-amber-800 bg-amber-100/50 p-1.5 rounded border border-amber-200 flex justify-between items-center">
               <span>Обрано {{ optimizationSummary.topCandidates.length }} точок · ціль {{ optimizationSummary.params?.targetCoverage5Percent ?? 80 }}% за 5 хв.</span>
               <span class="font-bold">Кроки за порядком:</span>
@@ -440,10 +463,10 @@ const radiusOptions = [
                     </span>
                   </td>
                   <td class="p-1 text-center" :class="cand.deltaCoverage5 > 0 ? 'text-emerald-600 font-semibold' : 'text-slate-500'">
-                    +{{ cand.deltaCoverage5 }}%
+                    +{{ cand.deltaCount5 ?? cand.deltaCoverage5 }}{{ cand.deltaCount5 !== undefined ? ' т.' : '%' }}
                   </td>
                   <td class="p-1 text-center" :class="cand.deltaCoverage10 > 0 ? 'text-emerald-600 font-semibold' : 'text-slate-500'">
-                    +{{ cand.deltaCoverage10 }}%
+                    +{{ cand.deltaCount10 ?? cand.deltaCoverage10 }}{{ cand.deltaCount10 !== undefined ? ' т.' : '%' }}
                   </td>
                   <td class="p-1 text-right text-slate-600">
                     {{ Math.round(cand.deltaWalkingDistance ?? 0) }}м

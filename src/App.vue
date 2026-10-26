@@ -37,7 +37,7 @@ import type {ControlPoint} from './analytics/data/controlPoints.ts'
 import {useGisAnalytics} from "./analytics/composables/useGisAnalytics.ts";
 import ReportToiletModal from "./components/features/ReportToiletModal.vue";
 import {getStraightDistance} from "./components/utils/geo.ts";
-import type {OptimizationCandidate} from "./analytics/types/optimizationType.ts";
+import type {OptimizationCandidate, OptimizationMode} from "./analytics/types/optimizationType.ts";
 
 // --- ЛІНИВІ КОМПОНЕНТИ ---
 const LocationPrompt = defineAsyncComponent(
@@ -1531,7 +1531,7 @@ const handleShowBestCandidate = async (lat: number, lng: number) => {
 }
 
 // 5. Запуск оптимізації
-const handleRunOptimization = async () => {
+const handleRunOptimization = async (mode: OptimizationMode = 'overall') => {
   if (isOptimizing.value) return
 
   selectedCandidateIndex.value = null
@@ -1540,7 +1540,7 @@ const handleRunOptimization = async () => {
       (t) => typeof t.latitude === 'number' && typeof t.longitude === 'number'
   )
 
-  await runOptimizationTest(validToilets)
+  await runOptimizationTest(validToilets, mode)
 }
 // ==========================================================
 // WATCHERS

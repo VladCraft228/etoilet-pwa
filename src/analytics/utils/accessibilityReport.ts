@@ -33,7 +33,7 @@ const CATEGORY_LABELS: Record<ControlPoint['category'], string> = {
     shopping: 'ТРЦ / торгівля',
 }
 
-const categoryLabel = (c: ControlPoint['category']) => CATEGORY_LABELS[c] ?? c
+export const categoryLabel = (c: ControlPoint['category']) => CATEGORY_LABELS[c] ?? c
 
 const ROUTE_SOURCE_LABELS: Record<RouteSource, string> = {
     direct: 'Пряма',
@@ -48,6 +48,7 @@ const sourceLabel = (r: ControlPointAnalysisResult) => ROUTE_SOURCE_LABELS[r.rou
 /** Чи містить розрахунок поля, потрібні для порівняння «Евклід проти мережі». */
 const hasProvenance = (summary: AccessibilitySummary) =>
     summary.results.length > 0 &&
+    summary.timeModel === 'distance' &&
     summary.results.every((r) => r.routeSource !== undefined && (!r.analyzed || r.euclideanNearestMeters !== undefined))
 
 const localFilenameDate = () => new Date().toLocaleDateString('sv-SE')
@@ -141,9 +142,9 @@ function getZone(r: ControlPointAnalysisResult): Zone {
 }
 
 const ZONES: Array<{ key: Zone; emoji: string; title: string; tone: SectionTone }> = [
-    { key: 'comfort', emoji: '🟢', title: 'Зона комфорту (≤ 5 хвилин / до 400 м)', tone: 'emerald' },
-    { key: 'acceptable', emoji: '🟡', title: 'Допустима зона (5–10 хвилин / 400–800 м)', tone: 'amber' },
-    { key: 'critical', emoji: '🔴', title: 'Зона критичного дефіциту (> 10 хвилин / понад 800 м)', tone: 'red' },
+    { key: 'comfort', emoji: '🟢', title: 'Зона комфорту (≤ 5 хвилин / до ≈ 414 м)', tone: 'emerald' },
+    { key: 'acceptable', emoji: '🟡', title: 'Допустима зона (5–10 хвилин / ≈ 414–828 м)', tone: 'amber' },
+    { key: 'critical', emoji: '🔴', title: 'Зона критичного дефіциту (> 10 хвилин / понад ≈ 828 м)', tone: 'red' },
     { key: 'failed', emoji: '⚪', title: 'Не вдалося розрахувати', tone: 'slate' },
 ]
 
@@ -202,7 +203,7 @@ function renderEuclideanVsNetworkTable(summary: AccessibilitySummary): string {
         return renderSection({
             title: 'Евклід проти мережі',
             tone: 'amber',
-            bodyHtml: `<div class="p-6 text-sm text-amber-800">Цей розрахунок збережено старою версією застосунку (немає джерела маршруту та найближчої за Евклідом відстані). Натисніть «Оновити» в панелі аналітики й сформуйте звіт знову.</div>`,
+            bodyHtml: `<div class="p-6 text-sm text-amber-800">Цей розрахунок збережено старою версією застосунку (немає джерела маршруту, найближчої за Евклідом відстані або єдиної моделі часу 1.38 м/с). Натисніть «Оновити» в панелі аналітики й сформуйте звіт знову.</div>`,
         })
     }
 
@@ -396,20 +397,20 @@ export function exportAccessibilityReportHtml(
     }).join('')
 
     const legend = `<ul class="space-y-2">
-                        ${legendItem('bg-emerald-200 border border-emerald-300', 'Зона комфорту (≤ 5 хв / до 400 м)')}
-                        ${legendItem('bg-amber-200 border border-amber-300', 'Допустима зона (5–10 хв / 400–800 м)')}
-                        ${legendItem('bg-red-200 border border-red-300', 'Зона критичного дефіциту (&gt; 10 хв / понад 800 м)')}
+                        ${legendItem('bg-emerald-200 border border-emerald-300', 'Зона комфорту (≤ 5 хв / до ≈ 414 м)')}
+                        ${legendItem('bg-amber-200 border border-amber-300', 'Допустима зона (5–10 хв / ≈ 414–828 м)')}
+                        ${legendItem('bg-red-200 border border-red-300', 'Зона критичного дефіциту (&gt; 10 хв / понад ≈ 828 м)')}
                     </ul>`
 
     const notes = `<p class="mb-2"><strong>CF (Circuity Factor):</strong> Відношення довжини пішохідного маршруту до прямої відстані. Чим ближче до 1.0, тим пряміший шлях.</p>
-                    <p>Маршрутизація виконана через OSRM (профіль пішохода); розглянуто ${maxCandidates} найближчих вбиральні для кожної точки. CF підраховується лише за реальними маршрутами OSRM; прямі відстані (CF=1), fallback (×1.4) і корекція (×1.25) у статистику CF не входять.</p>
+                    <p>Маршрутизація виконана через OSRM (профіль пішохода); розглянуто ${maxCandidates} найближчих вбиральні для кожної точки. Час ходьби скрізь рахується як відстань / 1.38 м/с (5 хв ≈ 414 м, 10 хв ≈ 828 м). CF підраховується лише за реальними маршрутами OSRM; прямі відстані (CF=1), fallback (×1.4) і корекція (×1.25) у статистику CF не входять.</p>
                     <p class="mt-2 text-xs italic">* Для точок у межах прямої видимості (≤ 180 м) використовується direct route; якщо OSRM не зміг прокласти маршрут, застосовується fallback; для аномальних мережевих відхилень залишено лише захист від розриву графа.</p>`
 
     const html = renderReportPage({
         title: 'Звіт доступності вбиральень',
         heading: '🚽 Аналіз доступності міських вбиральень',
         subtitleHtml: `Звіт сформовано: <span class="font-medium text-slate-700">${dateStr}</span>`,
-        bodyHtml: kpis + renderCategorySection(summary) + renderEuclideanVsNetworkTable(summary) + zoneSections,
+        bodyHtml: kpis + renderEuclideanVsNetworkTable(summary) + renderCategorySection(summary) + zoneSections,
         footerHtml: renderFooterColumns(legend, notes),
     })
 

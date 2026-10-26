@@ -1,11 +1,14 @@
 import type { AccessibilitySummary } from './accessibility'
-import type { OptimizationCandidate } from '../types/optimizationType'
+import type { ControlPoint } from '../data/controlPoints'
+import type { CategoryImpact, OptimizationCandidate } from '../types/optimizationType'
 
 export function compareOptimizationCandidates(
     a: OptimizationCandidate,
     b: OptimizationCandidate
 ): number {
     return (
+        // Режим per-category: спершу нові точки в категоріях, що ще не досягли цілі
+        (b.deltaPriorityCount5 ?? 0) - (a.deltaPriorityCount5 ?? 0) ||
         // Порівняння за кількістю точок: відсотки округлені (1 точка ≈ 1.6%), тож Δ у % «стрибає» між 1 і 2
         (b.deltaCount5 ?? b.deltaCoverage5) - (a.deltaCount5 ?? a.deltaCoverage5) ||
         (b.deltaCount10 ?? b.deltaCoverage10) - (a.deltaCount10 ?? a.deltaCoverage10) ||
@@ -13,11 +16,55 @@ export function compareOptimizationCandidates(
     )
 }
 
+/** Категорії, у яких частка точок ≤ 5 хв нижча за ціль (у відсотках). */
+export function getDeficientCategories(
+    summary: AccessibilitySummary,
+    targetPercent: number
+): Set<ControlPoint['category']> {
+    const totals = new Map<ControlPoint['category'], { n: number; covered: number }>()
+    for (const r of summary.results) {
+        if (!r.analyzed) continue
+        const t = totals.get(r.point.category) ?? { n: 0, covered: 0 }
+        t.n++
+        if (r.isAccessible5Min) t.covered++
+        totals.set(r.point.category, t)
+    }
+
+    const out = new Set<ControlPoint['category']>()
+    for (const [cat, t] of totals) {
+        if ((t.covered / t.n) * 100 < targetPercent) out.add(cat)
+    }
+    return out
+}
+
+/** Покриття за категоріями до і після додавання обраних вбиралень (рахунок точок). */
+export function computeCategoryImpact(before: AccessibilitySummary, after: AccessibilitySummary): CategoryImpact[] {
+    const afterById = new Map(after.results.map((r) => [r.point.id, r]))
+    const map = new Map<CategoryImpact['category'], CategoryImpact>()
+
+    for (const b of before.results) {
+        const a = afterById.get(b.point.id)
+        if (!b.analyzed || !a?.analyzed) continue
+
+        const cat = b.point.category
+        if (!map.has(cat)) map.set(cat, { category: cat, n: 0, before5: 0, after5: 0, before10: 0, after10: 0 })
+        const row = map.get(cat)!
+        row.n++
+        if (b.isAccessible5Min) row.before5++
+        if (a.isAccessible5Min) row.after5++
+        if (b.isAccessible10Min) row.before10++
+        if (a.isAccessible10Min) row.after10++
+    }
+
+    return Array.from(map.values())
+}
+
 export function evaluateCandidate(
     latitude: number,
     longitude: number,
     baseline: AccessibilitySummary,
     result: AccessibilitySummary,
+    priorityCategories?: ReadonlySet<ControlPoint['category']> | null,
 ): OptimizationCandidate {
     const improvedPoints = result.results.filter((r) => {
         if (!r.analyzed) return false
@@ -31,6 +78,18 @@ export function evaluateCandidate(
             r.walkingDistanceMeters < before.walkingDistanceMeters
         )
     }).length
+
+    const baselineById = new Map(baseline.results.map((b) => [b.point.id, b]))
+    const deltaPriorityCount5 = priorityCategories
+        ? result.results.filter((r) => {
+            const before = baselineById.get(r.point.id)
+            return (
+                priorityCategories.has(r.point.category) &&
+                r.analyzed && r.isAccessible5Min &&
+                before?.analyzed === true && !before.isAccessible5Min
+            )
+        }).length
+        : undefined
 
     const candidate: OptimizationCandidate = {
         latitude,
@@ -48,11 +107,51 @@ export function evaluateCandidate(
             baseline.accessible10MinPercent,
         improvedPoints,
         deltaWalkingDistance: baseline.avgWalkingDistanceMeters - result.avgWalkingDistanceMeters,
+        deltaPriorityCount5,
         deltaCount5: result.accessible5MinCount - baseline.accessible5MinCount,
         deltaCount10: result.accessible10MinCount - baseline.accessible10MinCount,
         n: result.totalControlPoints,
     }
     return candidate
+}
+
+/**
+ * Кандидати навколо дефіцитних точок: сама точка + кільця заданих радіусів по 8 напрямках.
+ * Рівномірна сітка ~900 м часто не має вузла в межах 400 м від проблемної точки,
+ * тому саме ці кандидати здатні реально дати покриття за 5 хв.
+ */
+export function generateDeficitCandidates(
+    points: Array<{ latitude: number; longitude: number }>,
+    radiiMeters: number[] = [120, 250],
+    directions: number = 8
+): Array<{ latitude: number; longitude: number }> {
+    const out: Array<{ latitude: number; longitude: number }> = []
+    const seen = new Set<string>()
+    const push = (latitude: number, longitude: number) => {
+        const lat = Number(latitude.toFixed(6))
+        const lng = Number(longitude.toFixed(6))
+        const key = `${lat},${lng}`
+        if (seen.has(key)) return
+        seen.add(key)
+        out.push({ latitude: lat, longitude: lng })
+    }
+
+    for (const p of points) {
+        push(p.latitude, p.longitude)
+        const metersPerDegLat = 111320
+        const metersPerDegLng = 111320 * Math.cos((p.latitude * Math.PI) / 180)
+        for (const r of radiiMeters) {
+            for (let k = 0; k < directions; k++) {
+                const angle = (2 * Math.PI * k) / directions
+                push(
+                    p.latitude + (r * Math.sin(angle)) / metersPerDegLat,
+                    p.longitude + (r * Math.cos(angle)) / metersPerDegLng
+                )
+            }
+        }
+    }
+
+    return out
 }
 
 export function generateCandidateGrid(
