@@ -23,7 +23,8 @@ import {
     MIN_DISTANCE_TO_EXISTING_METERS
 } from '../utils/optimization'
 import type { ControlPoint } from '../data/controlPoints'
-import type { OptimizationCandidate, OptimizationMode, OptimizationSummary } from '../types/optimizationType'
+import type { OptimizationCandidate, OptimizationCheckpoint, OptimizationMode, OptimizationSummary } from '../types/optimizationType'
+import { keepScreenAwake } from '../utils/wakeLock'
 
 // ==========================================
 // 1. УТИЛІТИ КЕШУВАННЯ В LOCALSTORAGE
@@ -32,6 +33,7 @@ import type { OptimizationCandidate, OptimizationMode, OptimizationSummary } fro
 const CACHE_KEYS = {
     ACCESSIBILITY: 'etoilet_gis_accessibility_stats',
     OPTIMIZATION: 'etoilet_gis_optimization_summary',
+    OPTIMIZATION_CHECKPOINT: 'etoilet_gis_optimization_checkpoint',
     OSRM_ROUTES: 'etoilet_osrm_network_cache',
     VIRTUAL_TOILETS: 'etoilet_gis_virtual_toilets'
 } as const
@@ -56,6 +58,17 @@ function saveToStorage(key: string, data: any): void {
     }
 }
 
+/** Короткий підпис набору вбиралень: id + координати, незалежно від порядку. */
+function toiletsSignature(toilets: Toilet[]): string {
+    const parts = toilets
+        .map((t) => `${t.id}:${t.latitude?.toFixed(5)},${t.longitude?.toFixed(5)}`)
+        .sort()
+        .join('|')
+    let hash = 5381
+    for (let i = 0; i < parts.length; i++) hash = ((hash << 5) + hash + parts.charCodeAt(i)) | 0
+    return `${toilets.length}-${(hash >>> 0).toString(36)}`
+}
+
 export function useGisAnalytics() {
     const isAnalyticsActive = ref(false)
     const isSimulationMode = ref(false)
@@ -67,6 +80,17 @@ export function useGisAnalytics() {
     const optimizationSummary = ref<OptimizationSummary | null>(
         loadFromStorage<OptimizationSummary>(CACHE_KEYS.OPTIMIZATION)
     )
+    const optimizationCheckpoint = ref<OptimizationCheckpoint | null>(
+        loadFromStorage<OptimizationCheckpoint>(CACHE_KEYS.OPTIMIZATION_CHECKPOINT)
+    )
+    const saveCheckpoint = (checkpoint: OptimizationCheckpoint) => {
+        optimizationCheckpoint.value = checkpoint
+        saveToStorage(CACHE_KEYS.OPTIMIZATION_CHECKPOINT, checkpoint)
+    }
+    const discardOptimizationCheckpoint = () => {
+        optimizationCheckpoint.value = null
+        localStorage.removeItem(CACHE_KEYS.OPTIMIZATION_CHECKPOINT)
+    }
     const bufferRadiusKm = ref(0.5)
     const virtualToilets = ref<Toilet[]>(
         loadFromStorage<Toilet[]>(CACHE_KEYS.VIRTUAL_TOILETS) || []
@@ -119,6 +143,7 @@ export function useGisAnalytics() {
 
     const recalculateNetworkAccessibility = async (realToilets: Toilet[]) => {
         isCalculatingNetwork.value = true
+        const releaseWakeLock = await keepScreenAwake()
 
         try {
             const stats = await evaluateControlPointsAccessibilityNetwork(
@@ -137,6 +162,7 @@ export function useGisAnalytics() {
             saveToStorage(CACHE_KEYS.ACCESSIBILITY, stats)
         } finally {
             isCalculatingNetwork.value = false
+            await releaseWakeLock()
         }
     }
 
@@ -263,10 +289,12 @@ export function useGisAnalytics() {
 
     const runOptimizationTest = async (
         realToilets: Toilet[],
-        mode: OptimizationMode = 'overall'
+        mode: OptimizationMode = 'overall',
+        options: { resume?: boolean } = {}
     ): Promise<OptimizationSummary | null> => {
         isOptimizing.value = true
         optimizationProgress.value = 0
+        const releaseWakeLock = await keepScreenAwake()
         try {
             // Кандидатна сітка ширша за географію контрольних точок, але не виходить за межі міської території.
             // Це дає простір для пошуку нових локацій без зайвого розширення області й збереження швидкості обчислень.
@@ -302,6 +330,30 @@ export function useGisAnalytics() {
             // Унікальні вузли сітки (після прив'язки), оцінені хоча б на одному кроці
             const evaluatedNodes = new Set<string>()
             let optimizationStep = 0
+
+            // Продовження перерваної оптимізації: відновлюємо обрані кроки, baseline береться з кешу маршрутів
+            const signature = toiletsSignature(initialToilets)
+            const checkpoint = optimizationCheckpoint.value
+            if (options.resume && checkpoint && checkpoint.mode === mode && checkpoint.toiletsSignature === signature) {
+                selectedCandidates.push(...checkpoint.selectedCandidates)
+                checkpoint.evaluatedNodes.forEach((k) => evaluatedNodes.add(k))
+                checkpoint.candidateKeys.forEach((k) => allCandidateKeys.add(k))
+                optimizationStep = selectedCandidates.length
+                currentToilets = [
+                    ...initialToilets,
+                    ...selectedCandidates.map((c, i) => ({
+                        id: `opt-${c.latitude}-${c.longitude}`,
+                        type: 'public' as const,
+                        status: 'virtual' as const,
+                        latitude: c.latitude,
+                        longitude: c.longitude,
+                        address: `Optimization candidate ${i + 1}`,
+                    })),
+                ]
+                baseline = await evaluateControlPointsAccessibilityNetwork(DNIPRO_CONTROL_POINTS, currentToilets)
+            } else {
+                discardOptimizationCheckpoint()
+            }
 
             while (true) {
                 // overall: ціль за загальним покриттям; per-category: кожна категорія має досягти цілі
@@ -389,6 +441,16 @@ export function useGisAnalytics() {
                     DNIPRO_CONTROL_POINTS,
                     currentToilets
                 )
+
+                saveCheckpoint({
+                    version: 1,
+                    mode,
+                    savedAt: new Date().toISOString(),
+                    toiletsSignature: signature,
+                    selectedCandidates: [...selectedCandidates],
+                    evaluatedNodes: Array.from(evaluatedNodes),
+                    candidateKeys: Array.from(allCandidateKeys),
+                })
             }
             optimizationProgress.value = 100
 
@@ -421,6 +483,7 @@ export function useGisAnalytics() {
 
             optimizationSummary.value = summary
             saveToStorage(CACHE_KEYS.OPTIMIZATION, summary)
+            discardOptimizationCheckpoint() // завершено — продовжувати вже нічого
             return summary
         } catch (error) {
             console.error('❌ Помилка під час симуляції оптимізації:', error)
@@ -428,6 +491,7 @@ export function useGisAnalytics() {
         } finally {
             isOptimizing.value = false
             isOptimizationOutdated.value = false
+            await releaseWakeLock()
         }
     }
 
@@ -486,6 +550,7 @@ export function useGisAnalytics() {
 
         localStorage.removeItem(CACHE_KEYS.ACCESSIBILITY)
         localStorage.removeItem(CACHE_KEYS.OPTIMIZATION)
+        discardOptimizationCheckpoint()
         localStorage.removeItem(CACHE_KEYS.VIRTUAL_TOILETS)
 
         if (clearRoutes) {
@@ -513,6 +578,8 @@ export function useGisAnalytics() {
         isOptimizationOutdated,
         optimizationProgress,
         optimizationSummary,
+        optimizationCheckpoint,
+        discardOptimizationCheckpoint,
         runOptimizationTest,
         runAccessibilityBenchmark,
         getSummaryStats,

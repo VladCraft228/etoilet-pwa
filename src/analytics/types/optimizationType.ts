@@ -66,3 +66,15 @@ export interface OptimizationSummary {
     bestCandidate: OptimizationCandidate | null
     topCandidates: OptimizationCandidate[]
 }
+
+/** Стан незавершеної оптимізації: зберігається після кожного кроку, щоб після перезавантаження сторінки можна було продовжити. */
+export interface OptimizationCheckpoint {
+    version: 1
+    mode: OptimizationMode
+    savedAt: string
+    /** Підпис набору вбиралень на момент старту: якщо змінився, продовжувати не можна. */
+    toiletsSignature: string
+    selectedCandidates: OptimizationCandidate[]
+    evaluatedNodes: string[]
+    candidateKeys: string[]
+}

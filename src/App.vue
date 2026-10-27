@@ -149,6 +149,8 @@ const {
   runOptimizationTest,
   optimizationProgress,
   optimizationSummary,
+  optimizationCheckpoint,
+  discardOptimizationCheckpoint,
   getBuffersGeoJSON,
   getSummaryStats,
   downloadCsvReport,
@@ -1531,7 +1533,7 @@ const handleShowBestCandidate = async (lat: number, lng: number) => {
 }
 
 // 5. Запуск оптимізації
-const handleRunOptimization = async (mode: OptimizationMode = 'overall') => {
+const handleRunOptimization = async (mode: OptimizationMode = 'overall', resume = false) => {
   if (isOptimizing.value) return
 
   selectedCandidateIndex.value = null
@@ -1540,7 +1542,7 @@ const handleRunOptimization = async (mode: OptimizationMode = 'overall') => {
       (t) => typeof t.latitude === 'number' && typeof t.longitude === 'number'
   )
 
-  await runOptimizationTest(validToilets, mode)
+  await runOptimizationTest(validToilets, mode, { resume })
 }
 // ==========================================================
 // WATCHERS
@@ -2197,8 +2199,11 @@ onUnmounted(() => {
           :is-optimization-outdated="isOptimizationOutdated"
           :optimization-progress="optimizationProgress"
           :optimization-summary="optimizationSummary"
+          :optimization-checkpoint="optimizationCheckpoint ? { mode: optimizationCheckpoint.mode, steps: optimizationCheckpoint.selectedCandidates.length, savedAt: optimizationCheckpoint.savedAt } : null"
           @calculate-network="recalculateNetworkAccessibility(approvedToilets)"
           @run-optimization="handleRunOptimization"
+          @resume-optimization="(mode) => handleRunOptimization(mode, true)"
+          @discard-optimization-checkpoint="discardOptimizationCheckpoint"
           @select-candidate="handleSelectCandidate"
           @show-candidate="handleShowBestCandidate"
           @toggle-category="toggleControlPointCategory"

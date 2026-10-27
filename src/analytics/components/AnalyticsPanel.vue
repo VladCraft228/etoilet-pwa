@@ -18,6 +18,8 @@ const props = defineProps<{
   accessibilityStats?: AccessibilitySummary | null
   selectedCategories?: ControlPoint['category'][]
   optimizationSummary?: OptimizationSummary | null
+  /** Незавершена оптимізація, яку можна продовжити після перезавантаження сторінки. */
+  optimizationCheckpoint?: { mode: OptimizationMode; steps: number; savedAt: string } | null
   selectedCandidateIndex?: number | null
   isLoadingNetwork?: boolean
   networkProgress?: number
@@ -68,6 +70,8 @@ const emit = defineEmits<{
   (e: 'clear-virtual'): void
   (e: 'calculate-network'): void
   (e: 'run-optimization', mode: OptimizationMode): void
+  (e: 'resume-optimization', mode: OptimizationMode): void
+  (e: 'discard-optimization-checkpoint'): void
   (e: 'select-candidate', candidate: OptimizationCandidate, index: number): void
   (e: 'show-candidate', lat: number, lng: number): void
   (e: 'toggle-category', category: ControlPoint['category']): void
@@ -393,6 +397,28 @@ const radiusOptions = [
           <span>Мережу змінено! Рекомендується оновити оптимізацію.</span>
         </div>
 
+        <div
+            v-if="optimizationCheckpoint && !isOptimizing"
+            class="bg-white border border-amber-300 rounded-lg p-1.5 space-y-1"
+        >
+          <div class="text-[9px] text-amber-900 leading-snug">
+            Знайдено незавершену оптимізацію ({{ optimizationModes.find((m) => m.value === optimizationCheckpoint!.mode)?.label }},
+            кроків: {{ optimizationCheckpoint.steps }}).
+          </div>
+          <div class="flex gap-1">
+            <button
+                type="button"
+                @click="emit('resume-optimization', optimizationCheckpoint!.mode)"
+                class="flex-1 py-1 bg-amber-500 hover:bg-amber-600 text-white text-[9px] font-bold rounded-md cursor-pointer"
+            >Продовжити</button>
+            <button
+                type="button"
+                @click="emit('discard-optimization-checkpoint')"
+                class="flex-1 py-1 bg-amber-100 hover:bg-amber-200 text-amber-900 text-[9px] font-semibold rounded-md cursor-pointer"
+            >Скинути</button>
+          </div>
+        </div>
+
         <div v-if="!isOptimizing" class="space-y-1">
           <div v-if="!optimizationSummary" class="flex items-center gap-1 text-[10px] font-semibold text-amber-900">
             <span class="material-symbols-outlined text-[14px] text-amber-600">tune</span>
@@ -463,10 +489,10 @@ const radiusOptions = [
                     </span>
                   </td>
                   <td class="p-1 text-center" :class="cand.deltaCoverage5 > 0 ? 'text-emerald-600 font-semibold' : 'text-slate-500'">
-                    +{{ cand.deltaCount5 ?? cand.deltaCoverage5 }}{{ cand.deltaCount5 !== undefined ? ' т.' : '%' }}
+                    +{{ cand.deltaCount5 ?? cand.deltaCoverage5 }}{{ cand.deltaCount5 !== undefined ? 'т.' : '%' }}
                   </td>
                   <td class="p-1 text-center" :class="cand.deltaCoverage10 > 0 ? 'text-emerald-600 font-semibold' : 'text-slate-500'">
-                    +{{ cand.deltaCount10 ?? cand.deltaCoverage10 }}{{ cand.deltaCount10 !== undefined ? ' т.' : '%' }}
+                    +{{ cand.deltaCount10 ?? cand.deltaCoverage10 }}{{ cand.deltaCount10 !== undefined ? 'т.' : '%' }}
                   </td>
                   <td class="p-1 text-right text-slate-600">
                     {{ Math.round(cand.deltaWalkingDistance ?? 0) }}м
