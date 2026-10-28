@@ -73,6 +73,12 @@ const mapsLink = (c: OptimizationCandidate) =>
 
 const localFilenameDate = () => new Date().toLocaleDateString('sv-SE')
 
+function getAnalysisMode(summary: OptimizationSummary): { label: string; filename: string } {
+    return summary.params?.mode === 'per-category'
+        ? { label: 'Кожна категорія', filename: 'per-category' }
+        : { label: 'Загальне покриття', filename: 'overall' }
+}
+
 // ==========================================================
 // SVG-СХЕМА (запасний варіант без зовнішніх бібліотек, працює офлайн)
 // ==========================================================
@@ -341,7 +347,7 @@ function renderTopTable(rows: ReportRow[]): string {
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-semibold text-right font-mono">${Math.round(r.candidate.avgWalkingDistance)}</td>
                                 <td class="px-6 py-4 text-sm text-gray-600 text-right">
                                     <span class="font-mono">${r.distanceToNearestExistingM ?? '—'}</span>
-                                    <div class="text-xs text-slate-400 max-w-[200px] ml-auto truncate" title="${escapeHtml(r.nearestExistingName)}">${escapeHtml(r.nearestExistingName)}</div>
+                                    <div class="text-xs text-slate-400 max-w-50 ml-auto truncate" title="${escapeHtml(r.nearestExistingName)}">${escapeHtml(r.nearestExistingName)}</div>
                                 </td>
                             </tr>`
         })
@@ -473,6 +479,7 @@ export function exportOptimizationReportHtml(
             : null
 
     const perCategory = summary.params?.mode === 'per-category'
+    const { label: analysisLabel, filename: modeFilename } = getAnalysisMode(summary)
     const categoriesReached = (summary.categoryImpact ?? []).every(
         (c) => c.n === 0 || (c.after5 / c.n) * 100 >= (target ?? 80)
     )
@@ -540,8 +547,8 @@ export function exportOptimizationReportHtml(
                     <p class="mt-2 text-xs italic">* Результат залежить від набору контрольних точок і якості пішохідного графа OSM; перед встановленням перевірте місце на місцевості.</p>`
 
     const html = renderReportPage({
-        title: 'Звіт оптимізації розміщення вбиральень',
-        heading: '📍 Оптимізація розміщення міських вбиральень',
+        title: `Звіт оптимізації розміщення вбиралень (${analysisLabel})`,
+        heading: `📍 Оптимізація розміщення міських вбиралень (${analysisLabel})`,
         subtitleHtml: `Звіт сформовано: <span class="font-medium text-slate-700">${dateStr}, ${timeStr}</span> · багатокрокова симуляція «що, якщо»`,
         bodyHtml:
             kpis +
@@ -561,7 +568,7 @@ export function exportOptimizationReportHtml(
         footerHtml: renderFooterColumns(legend, notes),
     })
 
-    downloadFile(html, `optimization_report_${localFilenameDate()}.html`, 'text/html;charset=utf-8;')
+    downloadFile(html, `optimization_report_${modeFilename}_${localFilenameDate()}.html`, 'text/html;charset=utf-8;')
 }
 
 // ==========================================================
@@ -571,8 +578,9 @@ export function exportOptimizationReportHtml(
 export function exportOptimizationReportCsv(summary: OptimizationSummary, toilets: Toilet[]): void {
     const rows = buildRows(summary, toilets)
     const q = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
+    const { label: analysisLabel, filename: modeFilename } = getAnalysisMode(summary)
 
-    let csv = '﻿'
+    let csv = `${q(`Звіт оптимізації розміщення вбиралень (${analysisLabel})`)}\n\n`
     csv += [
         '№', 'Широта', 'Довгота', 'Δ покриття 5 хв (%)', 'Δ покриття 10 хв (%)', 'Δ точок 5 хв', 'Δ точок 10 хв', 'Δ сер. відстані (м)',
         'Покриття 5 хв (%)', 'Покриття 10 хв (%)', 'Покращено точок',
@@ -617,5 +625,5 @@ export function exportOptimizationReportCsv(summary: OptimizationSummary, toilet
         }
     }
 
-    downloadFile(csv, `optimization_report_${localFilenameDate()}.csv`, 'text/csv;charset=utf-8;')
+    downloadFile(csv, `optimization_report_${modeFilename}_${localFilenameDate()}.csv`, 'text/csv;charset=utf-8;')
 }

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import type { Toilet } from '../../types'
 import type { ControlPoint } from '../data/controlPoints'
 import type { AccessibilitySummary } from '../utils/accessibility'
+import { EUCLID_COVERAGE_5_METERS, EUCLID_COVERAGE_10_METERS } from '../utils/accessibility'
 import type { OptimizationSummary, OptimizationCandidate, OptimizationMode } from '../types/optimizationType'
 import { calculateCategoryAccessibilityStats } from '../utils/categoryStats'
 
@@ -39,15 +40,6 @@ const optimizationModes: Array<{ value: OptimizationMode; label: string; short: 
 ]
 // Режим останнього збереженого результату («Оновити» повторює його)
 const lastOptimizationMode = computed<OptimizationMode>(() => props.optimizationSummary?.params?.mode ?? 'overall')
-const isRadiusChangedSinceLastCalc = ref(false)
-
-// Відстежуємо зміну радіусу лише якщо вже є результати аналізу
-watch(() => props.bufferRadiusKm, () => {
-  if (props.accessibilityStats) {
-    isRadiusChangedSinceLastCalc.value = true
-  }
-})
-
 const categoryStats = computed(() => {
   if (!props.accessibilityStats) return []
   return calculateCategoryAccessibilityStats(props.accessibilityStats.results)
@@ -60,6 +52,7 @@ const topCandidates = computed<OptimizationCandidate[]>(() => {
 
 const emit = defineEmits<{
   (e: 'change-radius', radiusKm: number): void
+  (e: 'update:activeThreshold', threshold: 5 | 10): void
   (e: 'export-csv'): void
   (e: 'export-html'): void
   (e: 'export-accessibility-csv'): void
@@ -75,22 +68,14 @@ const emit = defineEmits<{
   (e: 'select-candidate', candidate: OptimizationCandidate, index: number): void
   (e: 'show-candidate', lat: number, lng: number): void
   (e: 'toggle-category', category: ControlPoint['category']): void
-  (e: 'update:activeThreshold', threshold: 5 | 10): void
   (e: 'export-optimization-html'): void
   (e: 'export-optimization-csv'): void
 }>()
 
-const handleRecalculate = () => {
-  emit('calculate-network')
-  isRadiusChangedSinceLastCalc.value = false
-}
-
-const activeThreshold = ref<5 | 10>(5)
-
+// Пресети нормативів: радіус = час × швидкість ходьби (1,38 м/с), ті самі пороги, що й у мережевому аналізі
 const radiusOptions = [
-  { label: '300 м', km: 0.3, time: '~4 хв' },
-  { label: '500 м', km: 0.5, time: '~6 хв' },
-  { label: '800 м', km: 0.8, time: '~10 хв' },
+  { label: '5 хв', minutes: 5 as const, km: EUCLID_COVERAGE_5_METERS / 1000, time: `≈ ${EUCLID_COVERAGE_5_METERS} м` },
+  { label: '10 хв', minutes: 10 as const, km: EUCLID_COVERAGE_10_METERS / 1000, time: `≈ ${EUCLID_COVERAGE_10_METERS} м` },
 ]
 </script>
 
@@ -141,13 +126,13 @@ const radiusOptions = [
 
       <!-- 1. НАЛАШТУВАННЯ ТА СИМУЛЯЦІЯ -->
       <div class="space-y-2">
-        <label class="block text-[9px] font-bold text-slate-400 uppercase tracking-wider">Параметри пішої доступності</label>
-        <div class="grid grid-cols-3 gap-1">
+        <label class="block text-[9px] font-bold text-slate-400 uppercase tracking-wider">Норматив пішої доступності (кола та дефіцитні зони на мапі)</label>
+        <div class="grid grid-cols-2 gap-1">
           <button
               v-for="opt in radiusOptions"
               :key="opt.km"
               type="button"
-              @click="emit('change-radius', opt.km)"
+              @click="emit('change-radius', opt.km); emit('update:activeThreshold', opt.minutes)"
               :class="[
               'py-1 px-0.5 rounded-lg text-center transition-all cursor-pointer border flex flex-col items-center justify-center',
               bufferRadiusKm === opt.km
@@ -227,12 +212,6 @@ const radiusOptions = [
       <!-- 2. ГОЛОВНІ МЕТРИКИ ДОСТУПНОСТІ (ACCESSIBILITY) -->
       <div class="bg-indigo-50/90 p-2.5 rounded-xl border border-indigo-100 text-[11px] space-y-2 relative">
 
-        <div v-if="isRadiusChangedSinceLastCalc" class="absolute -top-1 -right-1 z-10">
-          <span class="flex h-3 w-3">
-            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-            <span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
-          </span>
-        </div>
 
         <div class="flex items-center justify-between font-bold text-indigo-950">
           <span class="flex items-center gap-1">
@@ -252,11 +231,6 @@ const radiusOptions = [
         </div>
 
         <template v-else-if="accessibilityStats">
-          <div v-if="isRadiusChangedSinceLastCalc" class="bg-amber-100 border border-amber-300 text-amber-900 px-2 py-1.5 rounded text-[10px] flex items-start gap-1.5 shadow-sm">
-            <span class="material-symbols-outlined text-[14px] mt-0.5 shrink-0">info</span>
-            <span>Радіус змінено на <b>{{ bufferRadiusKm * 1000 }}м</b>. Натисніть кнопку нижче, щоб оновити статистику.</span>
-          </div>
-
           <div class="grid grid-cols-2 gap-2 bg-white/60 p-2 rounded-lg border border-indigo-100/50">
             <div class="text-center">
               <div class="text-[9px] text-slate-500 uppercase">Мед. час ходу</div>
@@ -266,23 +240,6 @@ const radiusOptions = [
               <div class="text-[9px] text-slate-500 uppercase">Circuity Factor</div>
               <div class="text-lg font-bold text-amber-600">{{ accessibilityStats.circuitySampleSize === 0 ? '—' : accessibilityStats.medianCircuityFactor }}</div>
             </div>
-          </div>
-
-          <div class="grid grid-cols-2 gap-1.5 bg-slate-100 p-1 rounded-xl">
-            <button
-                type="button"
-                @click="activeThreshold = 5; emit('update:activeThreshold', 5)"
-                :class="activeThreshold === 5 ? 'bg-white shadow-sm text-indigo-600 font-bold' : 'text-slate-600 hover:bg-slate-200/60'"
-                class="py-2 text-xs rounded-lg transition-all cursor-pointer flex items-center justify-center">
-              Норматив 5 хв
-            </button>
-            <button
-                type="button"
-                @click="activeThreshold = 10; emit('update:activeThreshold', 10)"
-                :class="activeThreshold === 10 ? 'bg-white shadow-sm text-indigo-600 font-bold' : 'text-slate-600 hover:bg-slate-200/60'"
-                class="py-2 text-xs rounded-lg transition-all cursor-pointer flex items-center justify-center">
-              Норматив 10 хв
-            </button>
           </div>
 
           <div v-if="categoryStats && categoryStats.length > 0" class="pt-1">
@@ -325,16 +282,11 @@ const radiusOptions = [
           <div class="grid grid-cols-2 gap-1 pt-1">
             <button
                 type="button"
-                @click="handleRecalculate"
-                :class="[
-                    'col-span-2 py-1.5 font-bold rounded-lg text-[10px] transition-all shadow-sm flex items-center justify-center gap-1 cursor-pointer',
-                    isRadiusChangedSinceLastCalc
-                      ? 'bg-amber-500 hover:bg-amber-600 text-white animate-pulse'
-                      : 'bg-indigo-600 hover:bg-indigo-700 text-white'
-                ]"
+                @click="emit('calculate-network')"
+                class="col-span-2 py-1.5 font-bold rounded-lg text-[10px] transition-all shadow-sm flex items-center justify-center gap-1 cursor-pointer bg-indigo-600 hover:bg-indigo-700 text-white"
             >
               <span class="material-symbols-outlined text-[14px]">refresh</span>
-              <span>{{ isRadiusChangedSinceLastCalc ? 'Оновити дані (радіус змінено)' : 'Оновити розрахунок' }}</span>
+              <span>Оновити розрахунок</span>
             </button>
 
             <button

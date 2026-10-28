@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { WALKING_SPEED_MPS } from '../../analytics/utils/accessibility'
 
 const props = defineProps<{
   info: { distance: number; mins: number; type: 'osrm' | 'direct' } | null
@@ -8,6 +9,15 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits(['close'])
+
+// У режимі аналітики час рахуємо за тією ж моделлю, що й розрахунок доступності (1,38 м/с, без округлення вгору)
+const displayMins = computed(() => {
+  if (!props.info) return ''
+  if (props.isAnalyticsActive && props.info.type === 'osrm') {
+    return (props.info.distance / WALKING_SPEED_MPS / 60).toFixed(1)
+  }
+  return String(props.info.mins)
+})
 
 // Розрахунок Circuity Factor: K = OSRM / Straight
 const circuityMetrics = computed(() => {
@@ -47,7 +57,7 @@ const circuityMetrics = computed(() => {
 
           <div class="flex flex-col">
             <span class="text-sm font-black text-slate-800">
-              {{ info.mins }} хв {{ info.type === 'direct' ? 'навпростець' : 'пішки' }}
+              {{ displayMins }} хв {{ info.type === 'direct' ? 'навпростець' : 'пішки' }}
             </span>
             <span class="text-xs font-medium text-slate-500">
               {{ info.distance }} метрів

@@ -407,8 +407,8 @@ export function exportAccessibilityReportHtml(
                     <p class="mt-2 text-xs italic">* Для точок у межах прямої видимості (≤ 180 м) використовується direct route; якщо OSRM не зміг прокласти маршрут, застосовується fallback; для аномальних мережевих відхилень залишено лише захист від розриву графа.</p>`
 
     const html = renderReportPage({
-        title: 'Звіт доступності вбиральень',
-        heading: '🚽 Аналіз доступності міських вбиральень',
+        title: 'Звіт доступності вбиралень',
+        heading: '🚽 Аналіз доступності міських вбиралень',
         subtitleHtml: `Звіт сформовано: <span class="font-medium text-slate-700">${dateStr}</span>`,
         bodyHtml: kpis + renderEuclideanVsNetworkTable(summary) + renderCategorySection(summary) + zoneSections,
         footerHtml: renderFooterColumns(legend, notes),

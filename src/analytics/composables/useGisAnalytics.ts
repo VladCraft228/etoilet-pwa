@@ -6,7 +6,8 @@ import { calculateGisStats, exportGisReportCsv, exportGisReportHtml } from '../u
 import { DNIPRO_CONTROL_POINTS } from '../data/controlPoints'
 import {
     type AccessibilitySummary,
-    evaluateControlPointsAccessibilityNetwork
+    evaluateControlPointsAccessibilityNetwork,
+    EUCLID_COVERAGE_5_METERS
 } from '../utils/accessibility'
 import { exportAccessibilityResultsCsv, exportAccessibilityReportHtml } from '../utils/accessibilityReport'
 import { exportOptimizationReportHtml, exportOptimizationReportCsv } from '../utils/optimizationReport'
@@ -91,7 +92,7 @@ export function useGisAnalytics() {
         optimizationCheckpoint.value = null
         localStorage.removeItem(CACHE_KEYS.OPTIMIZATION_CHECKPOINT)
     }
-    const bufferRadiusKm = ref(0.5)
+    const bufferRadiusKm = ref(EUCLID_COVERAGE_5_METERS / 1000)
     const virtualToilets = ref<Toilet[]>(
         loadFromStorage<Toilet[]>(CACHE_KEYS.VIRTUAL_TOILETS) || []
     )

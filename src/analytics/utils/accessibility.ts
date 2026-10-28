@@ -91,7 +91,7 @@ const REQUEST_DELAY_MS = 350
 const FIVE_MINUTES_SECONDS = 5 * 60
 const TEN_MINUTES_SECONDS = 10 * 60
 const FALLBACK_CIRCUITY_FACTOR = 1.4 // Коефіцієнт для точок без мережевого маршруту
-const WALKING_SPEED_MPS = 1.38 // Середня швидкість пішохода м/с
+export const WALKING_SPEED_MPS = 1.38 // Середня швидкість пішохода м/с
 /** Пряма відстань, що відповідає 5/10 хв ходьби — для порівняння з мережею. */
 export const EUCLID_COVERAGE_5_METERS = Math.round(FIVE_MINUTES_SECONDS * WALKING_SPEED_MPS) // 414
 export const EUCLID_COVERAGE_10_METERS = Math.round(TEN_MINUTES_SECONDS * WALKING_SPEED_MPS) // 828
