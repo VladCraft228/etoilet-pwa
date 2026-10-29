@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import BaseModal from '../ui/BaseModal.vue'
-import BaseButton from "../ui/BaseButton.vue"; // <-- ІМПОРТУЄМО БАЗОВЕ ВІКНО (перевір шлях)
+import BaseButton from "../ui/BaseButton.vue";
 
 defineProps<{ isOpen: boolean }>()
 const emit = defineEmits(['close'])
@@ -21,7 +21,7 @@ const handleClose = () => {
         Alpha
       </div>
       <h2 class="text-xl font-black flex items-center gap-2">
-        <span class="material-symbols-outlined text-[28px]">map</span>
+        <img src="../../assets/image/favicon-transparent.svg" alt="fav-trans">
         e-Toilet PWA
       </h2>
       <p class="text-xs text-indigo-100 mt-1 font-medium">
@@ -35,7 +35,7 @@ const handleClose = () => {
       </p>
 
       <div class="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1 flex items-center gap-1">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600 mb-1 flex items-center gap-1">
           <span class="material-symbols-outlined text-[16px]">info</span>
           Швидка інструкція
         </h3>

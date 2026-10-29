@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { geocodingService, type GeocodeResult } from '../../services/geocodingService'
-import BaseModal from '../ui/BaseModal.vue' // <-- ІМПОРТУЄМО БАЗОВЕ ВІКНО
+import BaseModal from '../ui/BaseModal.vue'
 
 const props = defineProps<{ isOpen: boolean }>()
 const emit = defineEmits(['close', 'select'])
