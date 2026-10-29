@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import './style.css'
 import App from './App.vue'
+import { registerSW } from 'virtual:pwa-register'
 
 // Імпортуємо Toastification
 import Toast, {type PluginOptions, POSITION } from "vue-toastification"
@@ -19,3 +20,4 @@ const toastOptions: PluginOptions = {
 
 app.use(Toast, toastOptions)
 app.mount('#app')
+registerSW({ immediate: true })
