@@ -63,6 +63,9 @@ const RouteChoiceModal = defineAsyncComponent(
 const AnalyticsPanel = defineAsyncComponent(
     () => import('./analytics/components/AnalyticsPanel.vue')
 )
+const MapLegend = defineAsyncComponent(
+    () => import('./analytics/components/MapLegend.vue')
+)
 const OptimizationLayer = defineAsyncComponent(
     () => import('./analytics/components/OptimizationLayer.vue')
 )
@@ -162,6 +165,9 @@ const {
 } = useGisAnalytics()
 
 const selectedControlPointCategories = ref<ControlPoint['category'][]>([])
+const showAccessibilityLayer = ref(true)
+const showOptimizationLayer = ref(true)
+
 const visibleControlPoints = computed(() => {
   if (selectedControlPointCategories.value.length === 0) return controlPoints
 
@@ -176,6 +182,21 @@ const toggleControlPointCategory = (category: ControlPoint['category']) => {
       : [...selectedControlPointCategories.value, category]
 }
 
+const toggleAccessibilityLayer = () => {
+  showAccessibilityLayer.value = !showAccessibilityLayer.value
+  if (!isAnalyticsActive.value) return
+
+  renderControlPointsLayer(visibleControlPoints.value, showAccessibilityLayer.value)
+  if (accessibilityNetworkStats.value) {
+    renderUncoveredPoints(
+        accessibilityNetworkStats.value,
+        activeAccessibilityThreshold.value,
+        selectedControlPointCategories.value,
+        showAccessibilityLayer.value
+    )
+  }
+}
+
 const toast = useToast()
 
 // ==========================================================
@@ -188,7 +209,7 @@ const handleToggleAnalytics = () => {
   if (isAnalyticsActive.value) {
     const geojson = getBuffersGeoJSON(approvedToilets.value)
     renderAnalyticsBuffers(geojson)
-    renderControlPointsLayer(visibleControlPoints.value)
+    renderControlPointsLayer(visibleControlPoints.value, showAccessibilityLayer.value)
   } else {
     clearAnalyticsBuffers()
     clearVirtualMarkers()
@@ -254,7 +275,7 @@ watch(
         const geojson = getBuffersGeoJSON(approvedToilets.value)
         renderAnalyticsBuffers(geojson)
         renderVirtualMarkers(virtualToilets.value)
-        renderControlPointsLayer(visibleControlPoints.value)
+        renderControlPointsLayer(visibleControlPoints.value, showAccessibilityLayer.value)
       } else {
         clearVirtualMarkers()
         clearControlPointsLayer()
@@ -1567,7 +1588,8 @@ watch([accessibilityNetworkStats, activeAccessibilityThreshold, selectedControlP
     renderUncoveredPoints(
         newStats,
         activeAccessibilityThreshold.value,
-        selectedControlPointCategories.value
+        selectedControlPointCategories.value,
+        showAccessibilityLayer.value
     )
   } else {
     clearUncoveredPoints()
@@ -1581,7 +1603,8 @@ watch(isAnalyticsActive, (isActive) => {
     renderUncoveredPoints(
         accessibilityNetworkStats.value,
         activeAccessibilityThreshold.value,
-        selectedControlPointCategories.value
+        selectedControlPointCategories.value,
+        showAccessibilityLayer.value
     )
   }
 })
@@ -2196,6 +2219,8 @@ onUnmounted(() => {
           :is-simulation-mode="isSimulationMode"
           :virtual-toilets="virtualToilets"
           :is-optimizing="isOptimizing"
+          :show-accessibility-layer="showAccessibilityLayer"
+          :show-optimization-layer="showOptimizationLayer"
           :is-optimization-outdated="isOptimizationOutdated"
           :optimization-progress="optimizationProgress"
           :optimization-summary="optimizationSummary"
@@ -2207,6 +2232,8 @@ onUnmounted(() => {
           @select-candidate="handleSelectCandidate"
           @show-candidate="handleShowBestCandidate"
           @toggle-category="toggleControlPointCategory"
+          @toggle-accessibility-layer="toggleAccessibilityLayer"
+          @toggle-optimization-layer="showOptimizationLayer = !showOptimizationLayer"
           @change-radius="handleChangeRadius"
 
           @export-csv="downloadCsvReport(approvedToilets)"
@@ -2229,8 +2256,28 @@ onUnmounted(() => {
           :map="map"
           :candidates="topCandidates"
           :selected-index="selectedCandidateIndex"
-          :visible="true"
+          :visible="showOptimizationLayer"
           @select-candidate="handleSelectCandidate"
+      />
+
+      <!-- Легенда мапи з лічильниками (вбиральні, покриті / не покриті точки, кандидати) -->
+      <MapLegend
+          v-if="isAnalyticsActive"
+          v-show="
+        !isManualSelectionMode &&
+        !isPickingToiletMode &&
+        !(
+          activeToiletForPopup &&
+          !isDesktop
+        )
+      "
+          :toilet-count="approvedToilets.length"
+          :accessibility-stats="accessibilityNetworkStats"
+          :threshold="activeAccessibilityThreshold"
+          :selected-categories="selectedControlPointCategories"
+          :visible-control-point-count="visibleControlPoints.length"
+          :candidate-count="topCandidates.length"
+          :virtual-count="virtualToilets.length"
       />
 
 

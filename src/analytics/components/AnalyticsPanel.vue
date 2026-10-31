@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useDraggableOverlay } from '../../composables/useDraggableOverlay'
 import type { Toilet } from '../../types'
 import type { ControlPoint } from '../data/controlPoints'
 import type { AccessibilitySummary } from '../utils/accessibility'
@@ -29,6 +30,8 @@ const props = defineProps<{
   optimizationProgress?: number
   isSimulationMode?: boolean
   virtualToilets?: Toilet[]
+  showAccessibilityLayer?: boolean
+  showOptimizationLayer?: boolean
 }>()
 
 const isCollapsed = ref(false)
@@ -70,6 +73,8 @@ const emit = defineEmits<{
   (e: 'toggle-category', category: ControlPoint['category']): void
   (e: 'export-optimization-html'): void
   (e: 'export-optimization-csv'): void
+  (e: 'toggle-accessibility-layer'): void
+  (e: 'toggle-optimization-layer'): void
 }>()
 
 // Пресети нормативів: радіус = час × швидкість ходьби (1,38 м/с), ті самі пороги, що й у мережевому аналізі
@@ -77,18 +82,40 @@ const radiusOptions = [
   { label: '5 хв', minutes: 5 as const, km: EUCLID_COVERAGE_5_METERS / 1000, time: `≈ ${EUCLID_COVERAGE_5_METERS} м` },
   { label: '10 хв', minutes: 10 as const, km: EUCLID_COVERAGE_10_METERS / 1000, time: `≈ ${EUCLID_COVERAGE_10_METERS} м` },
 ]
+
+const {
+  positionStyle,
+  isDragging,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel,
+  consumeDragClick,
+} = useDraggableOverlay(true)
+
+const togglePanel = () => {
+  if (consumeDragClick()) return
+  isCollapsed.value = !isCollapsed.value
+}
 </script>
 
 <template>
   <div
-      class="absolute top-4 right-3 z-60 w-[calc(100vw-5rem)] max-w-77.5 sm:max-w-xs sm:w-80 max-h-[55dvh] sm:max-h-[calc(100dvh-2rem)] flex flex-col bg-white/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/80 transition-all duration-300 pointer-events-auto overflow-hidden"
+      class="absolute top-4 right-3 z-60 w-[calc(100vw-5rem)] max-w-77.5 sm:max-w-xs sm:w-80 max-h-[55dvh] sm:max-h-[calc(100dvh-2rem)] flex flex-col bg-white/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/80 transition-[max-height,box-shadow] duration-300 pointer-events-auto overflow-hidden"
+      :style="positionStyle()"
       :class="{ 'shadow-md max-h-12': isCollapsed }"
+      data-draggable-overlay
   >
     <!-- ШАПКА ПАНЕЛІ (Клік згортає/розгортає) -->
     <div
-        class="h-12 flex items-center justify-between px-3.5 bg-white/90 backdrop-blur-md shrink-0 select-none cursor-pointer hover:bg-slate-50/80 transition-colors"
-        :class="{ 'border-b border-slate-100/80': !isCollapsed }"
-        @click="isCollapsed = !isCollapsed"
+        class="h-12 flex items-center justify-between px-3.5 bg-white/90 backdrop-blur-md shrink-0 select-none cursor-grab active:cursor-grabbing touch-none hover:bg-slate-50/80 transition-colors"
+        :class="{ 'border-b border-slate-100/80': !isCollapsed, 'cursor-grabbing': isDragging }"
+        @pointerdown="onPointerDown"
+        @pointermove="onPointerMove"
+        @pointerup="onPointerUp"
+        @pointercancel="onPointerCancel"
+        @click="togglePanel"
+        @dragstart.prevent
     >
       <div class="flex items-center gap-2">
         <span class="material-symbols-outlined text-indigo-600 text-[22px]">analytics</span>
@@ -123,6 +150,38 @@ const radiusOptions = [
 
     <!-- ТІЛО ПАНЕЛІ -->
     <div v-show="!isCollapsed" class="overflow-y-auto p-2.5 sm:p-3 space-y-3 flex-1 overscroll-contain touch-pan-y scrollbar-thin">
+
+      <section class="space-y-1.5">
+        <h4 class="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Шари на мапі</h4>
+        <button
+            type="button"
+            class="w-full flex items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50/80 px-2.5 py-2 text-left transition-colors hover:bg-slate-100/80 cursor-pointer"
+            :aria-pressed="showAccessibilityLayer ?? true"
+            @click="emit('toggle-accessibility-layer')"
+        >
+          <span class="flex items-center gap-2 text-[10px] font-medium text-slate-700">
+            <span class="w-2.5 h-2.5 rounded-full bg-cyan-500 border border-white shadow-sm"></span>
+            Доступність мережі
+          </span>
+          <span class="material-symbols-outlined text-[17px]" :class="showAccessibilityLayer ?? true ? 'text-indigo-600' : 'text-slate-400'">
+            {{ showAccessibilityLayer ?? true ? 'visibility' : 'visibility_off' }}
+          </span>
+        </button>
+        <button
+            type="button"
+            class="w-full flex items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50/80 px-2.5 py-2 text-left transition-colors hover:bg-slate-100/80 cursor-pointer"
+            :aria-pressed="showOptimizationLayer ?? true"
+            @click="emit('toggle-optimization-layer')"
+        >
+          <span class="flex items-center gap-2 text-[10px] font-medium text-slate-700">
+            <span class="w-2.5 h-2.5 rounded-full bg-blue-500 border border-white shadow-sm"></span>
+            Оптимізація розміщення
+          </span>
+          <span class="material-symbols-outlined text-[17px]" :class="showOptimizationLayer ?? true ? 'text-indigo-600' : 'text-slate-400'">
+            {{ showOptimizationLayer ?? true ? 'visibility' : 'visibility_off' }}
+          </span>
+        </button>
+      </section>
 
       <!-- 1. НАЛАШТУВАННЯ ТА СИМУЛЯЦІЯ -->
       <div class="space-y-2">

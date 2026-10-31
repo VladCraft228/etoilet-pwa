@@ -493,7 +493,7 @@ export function useMap() {
         if (map.value.getSource(SOURCE_IDS.virtual)) map.value.removeSource(SOURCE_IDS.virtual)
     }
 
-    const renderControlPointsLayer = (controlPoints: any[]) => {
+    const renderControlPointsLayer = (controlPoints: any[], visible = true) => {
         if (!map.value) return
 
         const geojsonData = {
@@ -513,6 +513,9 @@ export function useMap() {
         const existingSource = map.value.getSource(SOURCE_IDS.control) as maplibregl.GeoJSONSource
         if (existingSource) {
             existingSource.setData(geojsonData as any)
+            if (map.value.getLayer('control-points-layer')) {
+                map.value.setLayoutProperty('control-points-layer', 'visibility', visible ? 'visible' : 'none')
+            }
             return
         }
 
@@ -522,6 +525,9 @@ export function useMap() {
             id: 'control-points-layer',
             type: 'circle',
             source: SOURCE_IDS.control,
+            layout: {
+                visibility: visible ? 'visible' : 'none'
+            },
             paint: {
                 'circle-radius': 6,
                 'circle-color': CYAN_COLOR,
@@ -572,7 +578,8 @@ export function useMap() {
     const renderUncoveredPoints = (
         stats: AccessibilitySummary | null,
         threshold: 5 | 10 = 5,
-        categories: ControlPoint['category'][] = []
+        categories: ControlPoint['category'][] = [],
+        visible = true
     ) => {
         if (!map.value || !stats) return
         currentThreshold.value = threshold
@@ -608,12 +615,12 @@ export function useMap() {
 
         if (existingSource) {
             existingSource.setData(geojsonData as any)
-            const hasData = uncovered.length > 0
+            const shouldShow = uncovered.length > 0 && visible
             if (map.value.getLayer('uncovered-points-halo')) {
-                map.value.setLayoutProperty('uncovered-points-halo', 'visibility', hasData ? 'visible' : 'none')
+                map.value.setLayoutProperty('uncovered-points-halo', 'visibility', shouldShow ? 'visible' : 'none')
             }
             if (map.value.getLayer('uncovered-points-core')) {
-                map.value.setLayoutProperty('uncovered-points-core', 'visibility', hasData ? 'visible' : 'none')
+                map.value.setLayoutProperty('uncovered-points-core', 'visibility', shouldShow ? 'visible' : 'none')
             }
             return
         }
@@ -624,6 +631,9 @@ export function useMap() {
             id: 'uncovered-points-halo',
             type: 'circle',
             source: SOURCE_IDS.uncovered,
+            layout: {
+                visibility: uncovered.length > 0 && visible ? 'visible' : 'none'
+            },
             paint: {
                 'circle-radius': 24,
                 'circle-color': RED_COLOR,
@@ -638,6 +648,9 @@ export function useMap() {
             id: 'uncovered-points-core',
             type: 'circle',
             source: SOURCE_IDS.uncovered,
+            layout: {
+                visibility: uncovered.length > 0 && visible ? 'visible' : 'none'
+            },
             paint: {
                 'circle-radius': 8,
                 'circle-color': '#dc2626',
