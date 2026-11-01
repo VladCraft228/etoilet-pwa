@@ -3,7 +3,8 @@ import maplibregl from 'maplibre-gl'
 import type { Point } from 'geojson'
 import type { Toilet } from '../types.ts'
 import type { ControlPoint } from '../analytics/data/controlPoints'
-import type { AccessibilitySummary } from '../analytics/utils/accessibility'
+import { WALKING_SPEED_MPS, type AccessibilitySummary } from '../analytics/utils/accessibility'
+import { routingService } from '../services/routingService'
 
 export type LatLng = [number, number]
 export type LngLat = [number, number]
@@ -21,7 +22,8 @@ const SOURCE_IDS = {
     virtual: 'virtual-toilets-source',
     control: 'control-points-source',
     uncovered: 'uncovered-points-source',
-    routeTrace: 'route-trace-source' // <--- ДОДАНО ДЖЕРЕЛО ДЛЯ ТРАСУВАННЯ МАРШРУТУ
+    routeTrace: 'route-trace-source',
+    routeDirect: 'route-direct-source'
 } as const
 
 export function useMap() {
@@ -32,6 +34,7 @@ export function useMap() {
     const selectedToiletId = ref<string | null>(null)
     const currentThreshold = ref<5 | 10>(5)
     let activePopup: maplibregl.Popup | null = null
+    let routeTraceRequestId = 0
 
     const openPopup = (lng: number, lat: number, html: string) => {
         if (!map.value) return
@@ -203,10 +206,14 @@ export function useMap() {
     // ==========================================================
     // ROUTE TRACE (ТРАСУВАННЯ ЛІНІЇ ДО ВБИРАЛЬНІ)
     // ==========================================================
-    const renderRouteTrace = (startLngLat: [number, number], endLngLat: [number, number]) => {
+    const renderRouteTrace = (
+        startLngLat: [number, number],
+        endLngLat: [number, number],
+        routeCoordinates?: LatLng[]
+    ) => {
         if (!map.value) return
 
-        const geojsonData = {
+        const directGeojson = {
             type: 'Feature',
             geometry: {
                 type: 'LineString',
@@ -215,32 +222,56 @@ export function useMap() {
             properties: {}
         }
 
-        const existingSource = map.value.getSource(SOURCE_IDS.routeTrace) as maplibregl.GeoJSONSource
-        if (existingSource) {
-            existingSource.setData(geojsonData as any)
-            return
+        const networkGeojson = routeCoordinates?.length ? {
+            type: 'Feature',
+            geometry: {
+                type: 'LineString',
+                coordinates: routeCoordinates.map(([lat, lng]): [number, number] => [lng, lat])
+            },
+            properties: {}
+        } : null
+
+        const updateLine = (
+            sourceId: string,
+            layerId: string,
+            data: typeof directGeojson,
+            color: string,
+            dashArray?: number[]
+        ) => {
+            const existingSource = map.value!.getSource(sourceId) as maplibregl.GeoJSONSource | undefined
+            if (existingSource) {
+                existingSource.setData(data as any)
+            } else {
+                map.value!.addSource(sourceId, { type: 'geojson', data: data as any })
+            }
+
+            if (!map.value!.getLayer(layerId)) {
+                map.value!.addLayer({
+                    id: layerId,
+                    type: 'line',
+                    source: sourceId,
+                    paint: {
+                        'line-color': color,
+                        'line-width': 3,
+                        ...(dashArray ? { 'line-dasharray': dashArray } : {})
+                    }
+                })
+            }
         }
 
-        map.value.addSource(SOURCE_IDS.routeTrace, {
-            type: 'geojson',
-            data: geojsonData as any
-        })
+        updateLine(SOURCE_IDS.routeDirect, 'route-direct-line', directGeojson, '#f59e0b', [2, 1.5])
 
-        map.value.addLayer({
-            id: 'route-trace-line',
-            type: 'line',
-            source: SOURCE_IDS.routeTrace,
-            paint: {
-                'line-color': '#6366f1',
-                'line-width': 3,
-                'line-dasharray': [2, 2]
-            }
-        })
+        if (networkGeojson) {
+            updateLine(SOURCE_IDS.routeTrace, 'route-trace-line', networkGeojson, '#4f46e5')
+        }
     }
 
     const clearRouteTrace = () => {
+        routeTraceRequestId++
         if (!map.value) return
+        if (map.value.getLayer('route-direct-line')) map.value.removeLayer('route-direct-line')
         if (map.value.getLayer('route-trace-line')) map.value.removeLayer('route-trace-line')
+        if (map.value.getSource(SOURCE_IDS.routeDirect)) map.value.removeSource(SOURCE_IDS.routeDirect)
         if (map.value.getSource(SOURCE_IDS.routeTrace)) map.value.removeSource(SOURCE_IDS.routeTrace)
     }
 
@@ -603,8 +634,11 @@ export function useMap() {
                     id: r.point.id,
                     name: r.point.name,
                     category: r.point.category,
+                    straightDistance: r.straightDistanceMeters,
                     timeMin: (r.walkingDurationSeconds / 60).toFixed(1),
                     distance: r.walkingDistanceMeters,
+                    circuityFactor: r.circuityFactor,
+                    routeSource: r.routeSource,
                     toiletLng: r.nearestToilet?.longitude,
                     toiletLat: r.nearestToilet?.latitude
                 }
@@ -622,6 +656,8 @@ export function useMap() {
             if (map.value.getLayer('uncovered-points-core')) {
                 map.value.setLayoutProperty('uncovered-points-core', 'visibility', shouldShow ? 'visible' : 'none')
             }
+            if (map.value.getLayer('uncovered-points-halo')) map.value.moveLayer('uncovered-points-halo')
+            if (map.value.getLayer('uncovered-points-core')) map.value.moveLayer('uncovered-points-core')
             return
         }
 
@@ -642,7 +678,7 @@ export function useMap() {
                 'circle-stroke-color': '#ffffff',
                 'circle-stroke-opacity': 0.8
             }
-        }, 'control-points-layer')
+        })
 
         map.value.addLayer({
             id: 'uncovered-points-core',
@@ -657,7 +693,7 @@ export function useMap() {
                 'circle-stroke-width': 2.5,
                 'circle-stroke-color': '#ffffff'
             }
-        }, 'control-points-layer')
+        })
 
         map.value.on('click', 'uncovered-points-core', (e) => {
             const feature = e.features?.[0]
@@ -667,14 +703,40 @@ export function useMap() {
             const ptCoords = (feature.geometry as Point).coordinates as [number, number]
 
             if (props.toiletLng != null && props.toiletLat != null) {
-                renderRouteTrace(ptCoords, [props.toiletLng, props.toiletLat])
+                const toiletCoords: [number, number] = [Number(props.toiletLng), Number(props.toiletLat)]
+                const requestId = ++routeTraceRequestId
+                renderRouteTrace(ptCoords, toiletCoords)
+                void routingService.getWalkingRoute([
+                    [ptCoords[1], ptCoords[0]],
+                    [toiletCoords[1], toiletCoords[0]]
+                ]).then((route) => {
+                    if (route && requestId === routeTraceRequestId) {
+                        renderRouteTrace(ptCoords, toiletCoords, route.coords)
+                    }
+                })
             }
 
+            const straightDistance = Number(props.straightDistance)
+            const walkingDistance = Number(props.distance)
+            const straightTime = straightDistance / WALKING_SPEED_MPS / 60
+            const walkingTime = Number(props.timeMin)
+            const circuityFactor = Number(props.circuityFactor)
+            const hasMeasuredCircuity = props.routeSource === 'osrm'
+            const formatTime = (minutes: number) => minutes.toFixed(1).replace('.', ',')
+
             openPopup(ptCoords[0], ptCoords[1], `
-                <div style="padding: 6px 10px; font-family: sans-serif; font-size: 11px; line-height: 1.3;">
-                    <div style="font-weight: 800; color: #dc2626; margin-bottom: 2px;">⚠️ Дефіцитна зона (${currentThreshold.value} хв норматив)</div>
-                    <div style="font-weight: 600; color: #1e293b;">${props.name}</div>
-                    <div style="color: #64748b; margin-top: 4px;">Час ходу: <b>${props.timeMin} хв</b> (${props.distance} м)</div>
+                <div style="padding: 8px 10px; font-family: sans-serif; font-size: 11px; line-height: 1.5; min-width: 210px;">
+                    <div style="font-weight: 800; color: #dc2626; margin-bottom: 3px;">⚠️ Дефіцитна зона (${currentThreshold.value} хв норматив)</div>
+                    <div style="font-weight: 600; color: #1e293b; margin-bottom: 5px;">${props.id} ${props.name}</div>
+                    <div style="display:flex;align-items:center;gap:6px;color:#475569;">
+                      <span style="width:16px;border-top:2px dashed #f59e0b;flex:none;"></span>
+                      <span>Напряму ≈ <b>${Math.round(straightDistance)} м</b> (≈ ${formatTime(straightTime)} хв)</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:6px;color:#475569;">
+                      <span style="width:16px;border-top:2px solid #4f46e5;flex:none;"></span>
+                      <span>За мережею ≈ <b>${Math.round(walkingDistance)} м</b> (≈ ${formatTime(walkingTime)} хв)</span>
+                    </div>
+                    <div style="color: #475569;">Коефіцієнт звивистості (CF${hasMeasuredCircuity ? '' : ', оцінка'}): <b>${circuityFactor.toFixed(2).replace('.', ',')}</b></div>
                 </div>
             `)
         })

@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useDraggableOverlay } from '../../composables/useDraggableOverlay'
+import type { Toilet } from '../../types'
 import type { ControlPoint } from '../data/controlPoints'
 import type { AccessibilitySummary } from '../utils/accessibility'
 import { EUCLID_COVERAGE_5_METERS, EUCLID_COVERAGE_10_METERS } from '../utils/accessibility'
 
-const props = defineProps<{
-  /** Кількість наявних (схвалених) вбиралень на мапі. */
-  toiletCount: number
+const props = withDefaults(defineProps<{
+  /** Схвалені вбиральні, які показані на мапі. */
+  toilets: Toilet[]
   /** Результати мережевого розрахунку; null, доки розрахунок не запускали. */
   accessibilityStats?: AccessibilitySummary | null
   /** Активний норматив: 5 або 10 хв. */
@@ -20,9 +21,19 @@ const props = defineProps<{
   candidateCount?: number
   /** Кількість віртуальних вбиралень (симуляція). */
   virtualCount?: number
-}>()
+  /** Чи показаний шар мережевої доступності. */
+  showAccessibilityLayer?: boolean
+  /** Чи показаний шар кандидатів оптимізації. */
+  showOptimizationLayer?: boolean
+}>(), {
+  showAccessibilityLayer: true,
+  showOptimizationLayer: true,
+})
 
 const isCollapsed = ref(false)
+const isToiletsExpanded = ref(false)
+const publicToiletCount = computed(() => props.toilets.filter((toilet) => toilet.type === 'public').length)
+const bioToiletCount = computed(() => props.toilets.filter((toilet) => toilet.type === 'bio').length)
 const {
   positionStyle,
   isDragging,
@@ -103,11 +114,41 @@ const thresholdMeters = computed(() =>
     </div>
 
     <div v-if="!isCollapsed" class="px-3 pb-3 pt-1 space-y-1.5 text-[11px] text-slate-700 border-t border-slate-100">
-      <!-- Вбиральні -->
+      <section>
+        <button
+            type="button"
+            class="w-full flex items-center gap-2 rounded-md py-1 text-left hover:bg-slate-50"
+            :aria-expanded="isToiletsExpanded"
+            @click="isToiletsExpanded = !isToiletsExpanded"
+        >
+          <span class="flex-1 font-medium">Наявні вбиральні</span>
+          <b class="tabular-nums">{{ toilets.length }}</b>
+          <span class="material-symbols-outlined text-[16px] text-slate-400">
+            {{ isToiletsExpanded ? 'expand_less' : 'expand_more' }}
+          </span>
+        </button>
+        <div v-if="isToiletsExpanded" class="ml-2 mt-1 space-y-1 border-l border-slate-200 pl-2">
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-blue-600 shrink-0"></span>
+            <span class="flex-1">Громадські</span>
+            <b class="tabular-nums">{{ publicToiletCount }}</b>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-emerald-500 shrink-0"></span>
+            <span class="flex-1">Біотуалети</span>
+            <b class="tabular-nums">{{ bioToiletCount }}</b>
+          </div>
+        </div>
+      </section>
+
       <div class="flex items-center gap-2">
-        <span class="w-3 h-3 rounded-full bg-emerald-500 border-2 border-white shadow shrink-0"></span>
-        <span class="flex-1">Наявні вбиральні</span>
-        <b class="tabular-nums">{{ toiletCount }}</b>
+        <span class="w-4 h-4 rounded-full border border-dashed border-indigo-600 bg-indigo-500/10 shrink-0"></span>
+        <span class="flex-1">Евклідові буфери навколо вбиралень</span>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <span class="w-4 h-4 rounded-full bg-emerald-500 border border-white shadow text-[8px] font-bold text-white flex items-center justify-center shrink-0">3</span>
+        <span class="flex-1">Кількість вбиралень у кластері</span>
       </div>
 
       <div v-if="(virtualCount ?? 0) > 0" class="flex items-center gap-2">
@@ -116,34 +157,38 @@ const thresholdMeters = computed(() =>
         <b class="tabular-nums">{{ virtualCount }}</b>
       </div>
 
-      <!-- Контрольні точки -->
-      <template v-if="coverage">
-        <div class="flex items-center gap-2">
+      <template v-if="showAccessibilityLayer">
+        <!-- Контрольні точки -->
+        <template v-if="coverage">
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full border-2 border-white shadow shrink-0" style="background:#06b6d4"></span>
+            <span class="flex-1">Покриті ≤ {{ threshold }} хв</span>
+            <b class="tabular-nums">{{ coverage.covered }}</b>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-red-500/35 border border-red-500/70 shadow shrink-0 flex items-center justify-center">
+              <span class="w-1.5 h-1.5 rounded-full bg-red-600 border border-white"></span>
+            </span>
+            <span class="flex-1">Не покриті (дефіцит)</span>
+            <b class="tabular-nums">{{ coverage.uncovered }}</b>
+          </div>
+          <div class="pt-1.5 mt-1 border-t border-slate-100 flex items-center justify-between font-semibold text-slate-800">
+            <span>Покриття ({{ coverage.covered }} з {{ coverage.total }})</span>
+            <span class="tabular-nums">{{ coverage.percent }}%</span>
+          </div>
+          <div class="text-[10px] text-slate-400 leading-snug">
+            Норматив: ≤ {{ threshold }} хв ходьби ≈ {{ thresholdMeters }} м пішохідною мережею
+          </div>
+        </template>
+        <div v-else class="flex items-center gap-2">
           <span class="w-3 h-3 rounded-full border-2 border-white shadow shrink-0" style="background:#06b6d4"></span>
-          <span class="flex-1">Покриті ≤ {{ threshold }} хв</span>
-          <b class="tabular-nums">{{ coverage.covered }}</b>
-        </div>
-        <div class="flex items-center gap-2">
-          <span class="w-3 h-3 rounded-full border-2 border-white shadow shrink-0" style="background:#dc2626"></span>
-          <span class="flex-1">Не покриті (дефіцит)</span>
-          <b class="tabular-nums">{{ coverage.uncovered }}</b>
-        </div>
-        <div class="pt-1.5 mt-1 border-t border-slate-100 flex items-center justify-between font-semibold text-slate-800">
-          <span>Покриття ({{ coverage.covered }} з {{ coverage.total }})</span>
-          <span class="tabular-nums">{{ coverage.percent }}%</span>
-        </div>
-        <div class="text-[10px] text-slate-400 leading-snug">
-          Норматив: ≤ {{ threshold }} хв ходьби ≈ {{ thresholdMeters }} м пішохідною мережею
+          <span class="flex-1">Контрольні точки</span>
+          <b class="tabular-nums">{{ visibleControlPointCount }}</b>
         </div>
       </template>
-      <div v-else class="flex items-center gap-2">
-        <span class="w-3 h-3 rounded-full border-2 border-white shadow shrink-0" style="background:#06b6d4"></span>
-        <span class="flex-1">Контрольні точки</span>
-        <b class="tabular-nums">{{ visibleControlPointCount }}</b>
-      </div>
 
       <!-- Кандидати оптимізації -->
-      <template v-if="(candidateCount ?? 0) > 0">
+      <template v-if="showOptimizationLayer && (candidateCount ?? 0) > 0">
         <div class="pt-1.5 mt-1 border-t border-slate-100 flex items-center gap-2">
           <span class="w-4 h-4 rounded-full bg-blue-500 border-2 border-white shadow text-[8px] font-bold text-white flex items-center justify-center shrink-0">2</span>
           <span class="flex-1">Кандидати нових вбиралень</span>

@@ -84,7 +84,7 @@ const circuityMetrics = computed(() => {
         </div>
 
         <div class="flex items-center gap-1 font-bold">
-          <span class="text-slate-500 font-normal">Коеф. $K$:</span>
+          <span class="text-slate-500 font-normal">Коеф. CF:</span>
           <span
               :class="[
               'px-1.5 py-0.5 rounded-md text-[11px]',

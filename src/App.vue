@@ -2271,13 +2271,15 @@ onUnmounted(() => {
           !isDesktop
         )
       "
-          :toilet-count="approvedToilets.length"
+          :toilets="approvedToilets"
           :accessibility-stats="accessibilityNetworkStats"
           :threshold="activeAccessibilityThreshold"
           :selected-categories="selectedControlPointCategories"
           :visible-control-point-count="visibleControlPoints.length"
           :candidate-count="topCandidates.length"
           :virtual-count="virtualToilets.length"
+          :show-accessibility-layer="showAccessibilityLayer"
+          :show-optimization-layer="showOptimizationLayer"
       />
 
 

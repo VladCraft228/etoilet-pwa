@@ -7,6 +7,7 @@ import type { AccessibilitySummary } from '../utils/accessibility'
 import { EUCLID_COVERAGE_5_METERS, EUCLID_COVERAGE_10_METERS } from '../utils/accessibility'
 import type { OptimizationSummary, OptimizationCandidate, OptimizationMode } from '../types/optimizationType'
 import { calculateCategoryAccessibilityStats } from '../utils/categoryStats'
+import { categoryLabel } from '../utils/accessibilityReport'
 
 const props = defineProps<{
   bufferRadiusKm: number
@@ -18,6 +19,7 @@ const props = defineProps<{
     maxNearestDistanceMeters: number
   }
   accessibilityStats?: AccessibilitySummary | null
+  activeThreshold?: 5 | 10
   selectedCategories?: ControlPoint['category'][]
   optimizationSummary?: OptimizationSummary | null
   /** Незавершена оптимізація, яку можна продовжити після перезавантаження сторінки. */
@@ -46,6 +48,20 @@ const lastOptimizationMode = computed<OptimizationMode>(() => props.optimization
 const categoryStats = computed(() => {
   if (!props.accessibilityStats) return []
   return calculateCategoryAccessibilityStats(props.accessibilityStats.results)
+})
+const filteredCoverage = computed(() => {
+  const results = props.accessibilityStats?.results ?? []
+  const categories = props.selectedCategories ?? []
+  const analyzed = results.filter(
+      (result) => result.analyzed && (categories.length === 0 || categories.includes(result.point.category))
+  )
+  if (analyzed.length === 0) return null
+
+  const covered = analyzed.filter((result) =>
+      props.activeThreshold === 10 ? result.isAccessible10Min : result.isAccessible5Min
+  ).length
+
+  return Math.round((covered / analyzed.length) * 100)
 })
 
 const topCandidates = computed<OptimizationCandidate[]>(() => {
@@ -277,8 +293,8 @@ const togglePanel = () => {
             <span class="material-symbols-outlined text-[16px] text-indigo-600">directions_walk</span>
             Мережева доступність
           </span>
-          <span v-if="accessibilityStats" class="text-xs text-indigo-600 font-extrabold">
-            {{ accessibilityStats.accessible5MinPercent }}% покрито
+          <span v-if="filteredCoverage !== null" class="text-xs text-indigo-600 font-extrabold">
+            {{ filteredCoverage }}% покрито ≤ {{ activeThreshold ?? 5 }} хв
           </span>
         </div>
 
@@ -296,7 +312,7 @@ const togglePanel = () => {
               <div class="text-lg font-bold text-indigo-700">{{ accessibilityStats.medianWalkingTimeMins }} <span class="text-[10px] font-normal">хв</span></div>
             </div>
             <div class="text-center border-l border-indigo-100">
-              <div class="text-[9px] text-slate-500 uppercase">Circuity Factor</div>
+              <div class="text-[9px] text-slate-500 uppercase">CF (медіана)</div>
               <div class="text-lg font-bold text-amber-600">{{ accessibilityStats.circuitySampleSize === 0 ? '—' : accessibilityStats.medianCircuityFactor }}</div>
             </div>
           </div>
@@ -310,7 +326,7 @@ const togglePanel = () => {
                   <th class="p-1 text-left">Кат.</th>
                   <th class="p-1 text-center">5 хв</th>
                   <th class="p-1 text-center">10 хв</th>
-                  <th class="p-1 text-right">CF</th>
+                  <th class="p-1 text-right">CF (сер.)</th>
                 </tr>
                 </thead>
                 <tbody>
@@ -328,7 +344,7 @@ const togglePanel = () => {
                     @keydown.enter.prevent="emit('toggle-category', stat.category)"
                     @keydown.space.prevent="emit('toggle-category', stat.category)"
                 >
-                  <td class="p-1 font-medium text-slate-700">{{ stat.category }}</td>
+                  <td class="p-1 font-medium text-slate-700">{{ categoryLabel(stat.category) }}</td>
                   <td class="p-1 text-center text-indigo-600 font-bold">{{ Math.round(stat.coverage5) }}%</td>
                   <td class="p-1 text-center text-amber-600 font-semibold">{{ Math.round(stat.coverage10) }}%</td>
                   <td class="p-1 text-right text-slate-600">{{ stat.avgCircuity != null ? stat.avgCircuity.toFixed(2) : '—' }}</td>

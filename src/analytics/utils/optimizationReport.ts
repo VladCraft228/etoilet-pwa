@@ -7,8 +7,6 @@ import { downloadFile, escapeHtml } from './download'
 import {
     TH_LEFT,
     TH_RIGHT,
-    legendItem,
-    renderFooterColumns,
     renderKpiCard,
     renderKpiGrid,
     renderReportPage,
@@ -222,7 +220,8 @@ function buildMapPayload(
 function buildMapBlock(
     rows: ReportRow[],
     toilets: Toilet[],
-    accessibility: AccessibilitySummary | null | undefined
+    accessibility: AccessibilitySummary | null | undefined,
+    legendHtml: string
 ): string {
     const svg = buildMapSvg(rows, toilets, accessibility)
     if (!svg) return ''
@@ -232,17 +231,27 @@ function buildMapBlock(
 
     return `
                 <div class="p-4">
+                    <div class="relative">
                     <div id="opt-map" class="hidden w-full rounded border border-slate-200" style="height: 560px;"></div>
-                    <div id="opt-map-fallback">
+                    <div id="opt-map-fallback" class="relative">
                         ${svg}
-                        <p class="mt-2 text-xs text-slate-400 text-center">Інтерактивну мапу не завантажено (потрібен інтернет) — показано спрощену схему.</p>
                     </div>
+                    <aside class="absolute bottom-3 left-3 z-10 max-w-[min(90%,320px)] rounded-lg border border-white/80 bg-white/90 p-3 text-xs text-slate-700 shadow-lg backdrop-blur">
+                        <h3 class="mb-2 font-semibold text-slate-800">Легенда</h3>
+                        ${legendHtml}
+                    </aside>
+                    </div>
+                    <p id="opt-map-fallback-note" class="hidden mt-2 text-xs text-slate-400 text-center">Інтерактивну мапу не завантажено (потрібен інтернет) — показано спрощену схему.</p>
                 </div>
                 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@${MAPLIBRE_VERSION}/dist/maplibre-gl.css" integrity="${MAPLIBRE_CSS_SRI}" crossorigin="">
                 <script src="https://unpkg.com/maplibre-gl@${MAPLIBRE_VERSION}/dist/maplibre-gl.js" integrity="${MAPLIBRE_JS_SRI}" crossorigin=""></script>
                 <script>
                 (function () {
-                    if (!window.maplibregl) return;
+                    var fallbackNote = document.getElementById('opt-map-fallback-note');
+                    if (!window.maplibregl) {
+                        fallbackNote.classList.remove('hidden');
+                        return;
+                    }
                     var data = ${payload};
                     var mapEl = document.getElementById('opt-map');
                     var fallbackEl = document.getElementById('opt-map-fallback');
@@ -250,6 +259,7 @@ function buildMapBlock(
                     var showFallback = function () {
                         mapEl.classList.add('hidden');
                         fallbackEl.style.display = '';
+                        fallbackNote.classList.remove('hidden');
                     };
 
                     var map;
@@ -272,7 +282,11 @@ function buildMapBlock(
 
                     // Стиль не завантажився (офлайн / немає WebGL) — повертаємо SVG-схему
                     var styleLoaded = false;
-                    map.on('load', function () { styleLoaded = true; map.resize(); });
+                    map.on('load', function () {
+                        styleLoaded = true;
+                        fallbackNote.classList.add('hidden');
+                        map.resize();
+                    });
                     map.on('error', function () { if (!styleLoaded) showFallback(); });
 
                     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
@@ -529,17 +543,25 @@ export function exportOptimizationReportHtml(
         }),
     ])
 
-    const mapBlock = buildMapBlock(rows, toilets, accessibility)
+    const mapLegendItem = (marker: string, label: string) =>
+        `<li class="flex items-center gap-2"><span class="inline-flex h-6 w-6 shrink-0 items-center justify-center">${marker}</span><span>${label}</span></li>`
+    const candidateMarker = (color: string, number: string) =>
+        `<span class="flex h-5 w-5 items-center justify-center rounded-full border-2 border-white text-[10px] font-bold text-white shadow" style="background:${color}">${number}</span>`
+    const toiletMarker = (color: string) =>
+        `<span class="h-3 w-3 rounded-full border-2 border-white shadow" style="background:${color}"></span>`
+    const controlPointMarker = (color: string) =>
+        `<span class="h-2.5 w-2.5 rotate-45 border border-white shadow" style="background:${color}"></span>`
 
     const legend = `<ul class="space-y-2">
-                        ${legendItem('bg-emerald-600', 'Крок №1 (перша додана вбиральня)')}
-                        ${legendItem('bg-indigo-600', 'Кроки №2 і далі')}
-                        ${legendItem('bg-blue-600', 'Наявні громадські вбиральні')}
-                        ${legendItem('bg-emerald-500', 'Наявні біотуалети')}
-                        ${legendItem('bg-green-500', 'Контрольна точка ≤ 5 хв')}
-                        ${legendItem('bg-yellow-500', 'Контрольна точка 5–10 хв')}
-                        ${legendItem('bg-red-500', 'Контрольна точка &gt; 10 хв')}
+                        ${mapLegendItem(candidateMarker('#059669', '1'), 'Крок №1 (перша додана вбиральня)')}
+                        ${mapLegendItem(candidateMarker('#4f46e5', '2'), 'Кроки №2 і далі')}
+                        ${mapLegendItem(toiletMarker('#2563eb'), 'Наявні громадські вбиральні')}
+                        ${mapLegendItem(toiletMarker('#10b981'), 'Наявні біотуалети')}
+                        ${mapLegendItem(controlPointMarker('#22c55e'), 'Контрольна точка ≤ 5 хв')}
+                        ${mapLegendItem(controlPointMarker('#eab308'), 'Контрольна точка 5–10 хв')}
+                        ${mapLegendItem(controlPointMarker('#ef4444'), 'Контрольна точка &gt; 10 хв')}
                     </ul>`
+    const mapBlock = buildMapBlock(rows, toilets, accessibility, legend)
 
     const notes = `<p class="mb-2"><strong>Δ (дельта):</strong> зміна метрик відносно baseline на поточному кроці. На кожному кроці кандидати ранжуються лексикографічно за ΔC5, ΔC10 і Δd (зменшення середньої відстані).</p>
                     <p class="mb-2"><strong>Покращено точок:</strong> кількість контрольних точок, для яких пішохідна відстань до найближчої вбиральні зменшилась.</p>
@@ -565,7 +587,7 @@ export function exportOptimizationReportHtml(
                 })
                 : '') +
             renderParams(summary),
-        footerHtml: renderFooterColumns(legend, notes),
+        footerHtml: `<h3 class="font-semibold text-slate-700 mb-2">Примітки:</h3>${notes}`,
     })
 
     downloadFile(html, `optimization_report_${modeFilename}_${localFilenameDate()}.html`, 'text/html;charset=utf-8;')
