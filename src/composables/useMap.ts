@@ -263,6 +263,10 @@ export function useMap() {
 
         if (networkGeojson) {
             updateLine(SOURCE_IDS.routeTrace, 'route-trace-line', networkGeojson, '#4f46e5')
+        } else {
+            // Нової геометрії ще немає: не лишаємо на мапі синю лінію попереднього кліку
+            const staleSource = map.value.getSource(SOURCE_IDS.routeTrace) as maplibregl.GeoJSONSource | undefined
+            staleSource?.setData({ type: 'FeatureCollection', features: [] } as any)
         }
     }
 
@@ -702,16 +706,29 @@ export function useMap() {
 
             const ptCoords = (feature.geometry as Point).coordinates as [number, number]
 
+            let routeStatusElementId: string | null = null
             if (props.toiletLng != null && props.toiletLat != null) {
                 const toiletCoords: [number, number] = [Number(props.toiletLng), Number(props.toiletLat)]
                 const requestId = ++routeTraceRequestId
                 renderRouteTrace(ptCoords, toiletCoords)
+                routeStatusElementId = `route-trace-status-${requestId}`
+                const setRouteStatus = (text: string, color: string) => {
+                    const el = document.getElementById(`route-trace-status-${requestId}`)
+                    if (el) {
+                        el.textContent = text
+                        el.style.color = color
+                    }
+                }
                 void routingService.getWalkingRoute([
                     [ptCoords[1], ptCoords[0]],
                     [toiletCoords[1], toiletCoords[0]]
                 ]).then((route) => {
-                    if (route && requestId === routeTraceRequestId) {
+                    if (requestId !== routeTraceRequestId) return
+                    if (route) {
                         renderRouteTrace(ptCoords, toiletCoords, route.coords)
+                        setRouteStatus('', '#64748b')
+                    } else {
+                        setRouteStatus('⚠️ Не вдалося завантажити лінію маршруту (сервер OSRM зайнятий). Натисніть на точку ще раз.', '#b45309')
                     }
                 })
             }
@@ -737,6 +754,7 @@ export function useMap() {
                       <span>За мережею ≈ <b>${Math.round(walkingDistance)} м</b> (≈ ${formatTime(walkingTime)} хв)</span>
                     </div>
                     <div style="color: #475569;">Коефіцієнт звивистості (CF${hasMeasuredCircuity ? '' : ', оцінка'}): <b>${circuityFactor.toFixed(2).replace('.', ',')}</b></div>
+                    ${routeStatusElementId ? `<div id="${routeStatusElementId}" style="margin-top: 3px; color: #64748b; font-size: 10px;">Завантаження маршруту…</div>` : ''}
                 </div>
             `)
         })
