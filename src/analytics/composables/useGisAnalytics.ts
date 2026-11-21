@@ -144,6 +144,7 @@ export function useGisAnalytics() {
     }
 
     const recalculateNetworkAccessibility = async (realToilets: Toilet[]) => {
+        networkProgress.value = 0
         isCalculatingNetwork.value = true
         const releaseWakeLock = await keepScreenAwake()
 

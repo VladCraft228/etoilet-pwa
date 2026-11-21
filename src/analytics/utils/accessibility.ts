@@ -146,10 +146,12 @@ async function fetchOsrmRouteRaw(
     endLat: number,
     retries = 3,
     onRetry?: AccessibilityOptions['onRetry']
-): Promise<{ distanceMeters: number; durationSeconds: number } | null> {
+): Promise<{ distanceMeters: number; durationSeconds: number } | null | undefined> {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
     try {
         const url = `${OSRM_BASE_URL}/${startLng},${startLat};${endLng},${endLat}?overview=false`
-        const response = await fetch(url)
+        const response = await fetch(url, { signal: controller.signal })
 
         if (!response.ok) {
             if (response.status === 429 && retries > 0) {
@@ -175,13 +177,17 @@ async function fetchOsrmRouteRaw(
     } catch (error) {
         if (retries > 0) {
             console.warn(`[OSRM Network Error] Retrying in 2.5s... (${retries} left)`)
-            onRetry?.('Збій з’єднання. Повтор маршруту за 2,5 с.')
+            onRetry?.(controller.signal.aborted
+                ? 'Сервер не відповів за 10 с. Повтор маршруту за 2,5 с.'
+                : 'Збій з’єднання. Повтор маршруту за 2,5 с.')
             await new Promise(r => setTimeout(r, 2500))
             return fetchOsrmRouteRaw(startLng, startLat, endLng, endLat, retries - 1, onRetry)
         }
 
         console.warn('[OSRM Network Request Failed]:', error)
-        return null
+        return controller.signal.aborted ? undefined : null
+    } finally {
+        clearTimeout(timeout)
     }
 }
 
@@ -200,9 +206,11 @@ async function getRouteWithCache(
 
     networkRequestCounter++
     const result = await fetchOsrmRouteRaw(startLng, startLat, endLng, endLat, 3, onRetry)
-    osrmCache.set(key, result)
-    persistOsrmCache()
-    return result
+    if (result !== undefined) {
+        osrmCache.set(key, result)
+        persistOsrmCache()
+    }
+    return result ?? null
 }
 
 // ==========================================================

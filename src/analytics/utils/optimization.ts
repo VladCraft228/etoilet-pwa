@@ -232,8 +232,10 @@ async function fetchNearestRaw(
     retries = 3,
     onRetry?: (message: string) => void
 ): Promise<SnapCacheValue | undefined> {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
     try {
-        const response = await fetch(`${OSRM_NEAREST_URL}/${longitude},${latitude}?number=1`)
+        const response = await fetch(`${OSRM_NEAREST_URL}/${longitude},${latitude}?number=1`, { signal: controller.signal })
 
         if (!response.ok) {
             if (response.status === 429 && retries > 0) {
@@ -258,11 +260,15 @@ async function fetchNearestRaw(
         }
     } catch {
         if (retries > 0) {
-            onRetry?.('Збій з’єднання. Повтор прив’язки за 2,5 с.')
+            onRetry?.(controller.signal.aborted
+                ? 'Сервер не відповів за 10 с. Повтор прив’язки за 2,5 с.'
+                : 'Збій з’єднання. Повтор прив’язки за 2,5 с.')
             await new Promise((r) => setTimeout(r, 2500))
             return fetchNearestRaw(latitude, longitude, retries - 1, onRetry)
         }
         return undefined
+    } finally {
+        clearTimeout(timeout)
     }
 }
 

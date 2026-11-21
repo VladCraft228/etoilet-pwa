@@ -303,7 +303,7 @@ const togglePanel = () => {
           <div class="w-full bg-indigo-200/60 rounded-full h-1.5 overflow-hidden">
             <div class="bg-indigo-600 h-1.5 rounded-full transition-all duration-200" :style="{ width: `${networkProgress ?? 0}%` }"></div>
           </div>
-          <div class="text-[9px] text-indigo-700 text-center animate-pulse">Розрахунок маршрутів OSRM...</div>
+          <div class="text-[9px] text-indigo-700 text-center animate-pulse">Розрахунок маршрутів OSRM · {{ networkProgress ?? 0 }}%</div>
         </div>
 
         <template v-else-if="accessibilityStats">
