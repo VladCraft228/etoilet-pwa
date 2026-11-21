@@ -30,6 +30,7 @@ const props = defineProps<{
   isOptimizing?: boolean
   isOptimizationOutdated?: boolean
   optimizationProgress?: number
+  optimizationStatus?: string
   isSimulationMode?: boolean
   virtualToilets?: Toilet[]
   showAccessibilityLayer?: boolean
@@ -478,8 +479,8 @@ const togglePanel = () => {
                 :style="{ width: `${optimizationProgress ?? 0}%` }"
             ></div>
           </div>
-          <div class="text-[9px] text-amber-700 text-center animate-pulse font-medium">
-            Пошук дефіцитних зон ({{ optimizationProgress }}%)...
+          <div class="text-[9px] text-amber-700 text-center font-medium">
+            {{ optimizationStatus || 'Підготовка оптимізації…' }}
           </div>
         </div>
 

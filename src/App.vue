@@ -151,6 +151,7 @@ const {
   isOptimizationOutdated,
   runOptimizationTest,
   optimizationProgress,
+  optimizationStatus,
   optimizationSummary,
   optimizationCheckpoint,
   discardOptimizationCheckpoint,
@@ -2223,6 +2224,7 @@ onUnmounted(() => {
           :show-optimization-layer="showOptimizationLayer"
           :is-optimization-outdated="isOptimizationOutdated"
           :optimization-progress="optimizationProgress"
+          :optimization-status="optimizationStatus"
           :optimization-summary="optimizationSummary"
           :optimization-checkpoint="optimizationCheckpoint ? { mode: optimizationCheckpoint.mode, steps: optimizationCheckpoint.selectedCandidates.length, savedAt: optimizationCheckpoint.savedAt } : null"
           @calculate-network="recalculateNetworkAccessibility(approvedToilets)"

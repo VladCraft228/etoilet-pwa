@@ -229,15 +229,17 @@ function persistSnapCache(): void {
 async function fetchNearestRaw(
     latitude: number,
     longitude: number,
-    retries = 3
+    retries = 3,
+    onRetry?: (message: string) => void
 ): Promise<SnapCacheValue | undefined> {
     try {
         const response = await fetch(`${OSRM_NEAREST_URL}/${longitude},${latitude}?number=1`)
 
         if (!response.ok) {
             if (response.status === 429 && retries > 0) {
+                onRetry?.('Сервер обмежив частоту запитів. Повтор прив’язки за 3 с.')
                 await new Promise((r) => setTimeout(r, 3000))
-                return fetchNearestRaw(latitude, longitude, retries - 1)
+                return fetchNearestRaw(latitude, longitude, retries - 1, onRetry)
             }
             return undefined // тимчасова помилка — не кешуємо
         }
@@ -256,8 +258,9 @@ async function fetchNearestRaw(
         }
     } catch {
         if (retries > 0) {
+            onRetry?.('Збій з’єднання. Повтор прив’язки за 2,5 с.')
             await new Promise((r) => setTimeout(r, 2500))
-            return fetchNearestRaw(latitude, longitude, retries - 1)
+            return fetchNearestRaw(latitude, longitude, retries - 1, onRetry)
         }
         return undefined
     }
@@ -271,13 +274,14 @@ async function fetchNearestRaw(
 export async function snapToWalkableNetwork(
     latitude: number,
     longitude: number,
-    maxDistanceMeters: number = MAX_SNAP_DISTANCE_METERS
+    maxDistanceMeters: number = MAX_SNAP_DISTANCE_METERS,
+    onRetry?: (message: string) => void
 ): Promise<SnappedCandidate | null> {
     const key = `${latitude.toFixed(5)},${longitude.toFixed(5)}`
 
     let cached = snapCache.get(key)
     if (cached === undefined) {
-        const fetched = await fetchNearestRaw(latitude, longitude)
+        const fetched = await fetchNearestRaw(latitude, longitude, 3, onRetry)
         // Невелика пауза лише після реального HTTP-запиту — щоб не впиратись у ліміт публічного OSRM
         await new Promise((r) => setTimeout(r, SNAP_REQUEST_DELAY_MS))
         if (fetched === undefined) return { latitude, longitude }

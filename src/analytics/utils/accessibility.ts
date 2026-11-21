@@ -63,6 +63,7 @@ export interface AccessibilitySummary {
 export interface AccessibilityOptions {
     maxCandidates?: number
     concurrencyLimit?: number
+    onRetry?: (message: string) => void
     bufferRadiusKm?: number
     maxRadiusMeters?: number
     /**
@@ -143,7 +144,8 @@ async function fetchOsrmRouteRaw(
     startLat: number,
     endLng: number,
     endLat: number,
-    retries = 3
+    retries = 3,
+    onRetry?: AccessibilityOptions['onRetry']
 ): Promise<{ distanceMeters: number; durationSeconds: number } | null> {
     try {
         const url = `${OSRM_BASE_URL}/${startLng},${startLat};${endLng},${endLat}?overview=false`
@@ -152,8 +154,9 @@ async function fetchOsrmRouteRaw(
         if (!response.ok) {
             if (response.status === 429 && retries > 0) {
                 console.warn('[OSRM] Rate limit hit. Waiting 3 seconds...')
+                onRetry?.('Сервер обмежив частоту запитів. Повтор маршруту за 3 с.')
                 await new Promise(r => setTimeout(r, 3000))
-                return fetchOsrmRouteRaw(startLng, startLat, endLng, endLat, retries - 1)
+                return fetchOsrmRouteRaw(startLng, startLat, endLng, endLat, retries - 1, onRetry)
             }
             console.warn(`[OSRM] HTTP Error ${response.status}`)
             return null
@@ -172,8 +175,9 @@ async function fetchOsrmRouteRaw(
     } catch (error) {
         if (retries > 0) {
             console.warn(`[OSRM Network Error] Retrying in 2.5s... (${retries} left)`)
+            onRetry?.('Збій з’єднання. Повтор маршруту за 2,5 с.')
             await new Promise(r => setTimeout(r, 2500))
-            return fetchOsrmRouteRaw(startLng, startLat, endLng, endLat, retries - 1)
+            return fetchOsrmRouteRaw(startLng, startLat, endLng, endLat, retries - 1, onRetry)
         }
 
         console.warn('[OSRM Network Request Failed]:', error)
@@ -185,7 +189,8 @@ async function getRouteWithCache(
     startLng: number,
     startLat: number,
     endLng: number,
-    endLat: number
+    endLat: number,
+    onRetry?: AccessibilityOptions['onRetry']
 ): Promise<{ distanceMeters: number; durationSeconds: number } | null> {
     const key = getCacheKey(startLat, startLng, endLat, endLng)
 
@@ -194,7 +199,7 @@ async function getRouteWithCache(
     }
 
     networkRequestCounter++
-    const result = await fetchOsrmRouteRaw(startLng, startLat, endLng, endLat)
+    const result = await fetchOsrmRouteRaw(startLng, startLat, endLng, endLat, 3, onRetry)
     osrmCache.set(key, result)
     persistOsrmCache()
     return result
@@ -307,7 +312,7 @@ export async function evaluateControlPointsAccessibilityNetwork(
                 for (const candidate of candidates) {
                     const route = await getRouteWithCache(
                         cp.longitude, cp.latitude,
-                        candidate.toilet.longitude!, candidate.toilet.latitude!
+                        candidate.toilet.longitude!, candidate.toilet.latitude!, options.onRetry
                     )
 
                     if (route) {

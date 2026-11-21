@@ -78,6 +78,7 @@ export function useGisAnalytics() {
     const isOptimizing = ref(false)
     const isOptimizationOutdated = ref(false)
     const optimizationProgress = ref(0)
+    const optimizationStatus = ref('')
     const optimizationSummary = ref<OptimizationSummary | null>(
         loadFromStorage<OptimizationSummary>(CACHE_KEYS.OPTIMIZATION)
     )
@@ -182,7 +183,8 @@ export function useGisAnalytics() {
         selectedCandidates: OptimizationCandidate[] = [],
         minSeparationMeters: number = 300,
         priorityCategories: ReadonlySet<ControlPoint['category']> | null = null,
-        onProgress?: (p: number) => void
+        onProgress?: (p: number) => void,
+        onStatus?: (message: string) => void
     ): Promise<{ ranked: OptimizationCandidate[]; evaluatedKeys: string[] }> => {
         const results: OptimizationCandidate[] = []
         const evaluatedKeys: string[] = []
@@ -202,6 +204,15 @@ export function useGisAnalytics() {
             longitude: p.point.longitude,
         }))
 
+        const existingPoints = realToilets.flatMap((toilet) =>
+            toilet.latitude != null && toilet.longitude != null
+                ? [turf.point([toilet.longitude, toilet.latitude])]
+                : []
+        )
+        const selectedPoints = selectedCandidates.map((point) => turf.point([point.longitude, point.latitude]))
+        // Запас враховує округлення координат і різницю між метриками OSRM і Turf.
+        const snapAllowanceMeters = MAX_SNAP_DISTANCE_METERS + 2
+
         for (let i = 0; i < total; i++) {
             const { latitude: lat, longitude: lng } = candidates[i]
 
@@ -219,9 +230,27 @@ export function useGisAnalytics() {
                 continue
             }
 
-            // ФІЛЬТР СУШІ: прив'язуємо вузол сітки до пішохідної мережі.
-            // Якщо найближча дорога далі за 40 м (Дніпро, затоки) — кандидата відкидаємо.
-            const snapped = await snapToWalkableNetwork(lat, lng)
+            const definitelyTooClose =
+                existingPoints.some((point) =>
+                    turf.distance(candPoint, point, { units: 'meters' }) <
+                    MIN_DISTANCE_TO_EXISTING_METERS - snapAllowanceMeters
+                ) ||
+                selectedPoints.some((point) =>
+                    turf.distance(candPoint, point, { units: 'meters' }) <
+                    minSeparationMeters - snapAllowanceMeters
+                )
+            if (definitelyTooClose) {
+                onProgress?.(Math.round(((i + 1) / total) * 100))
+                continue
+            }
+
+            const candidateLabel = `кандидат ${i + 1} із ${total}`
+            const snapStatus = `Прив’язка до пішохідної мережі · ${candidateLabel}`
+            onStatus?.(snapStatus)
+            const snapped = await snapToWalkableNetwork(
+                lat, lng, MAX_SNAP_DISTANCE_METERS,
+                (message) => onStatus?.(`${snapStatus}. ${message}`)
+            )
             if (!snapped) {
                 onProgress?.(Math.round(((i + 1) / total) * 100))
                 continue
@@ -271,10 +300,15 @@ export function useGisAnalytics() {
                 address: 'Candidate'
             }
 
+            const routeStatus = `Розрахунок маршрутів · ${candidateLabel}`
+            onStatus?.(routeStatus)
             const result = await evaluateControlPointsAccessibilityNetwork(
                 DNIPRO_CONTROL_POINTS,
                 [...realToilets, virtualToilet],
-                { reuseBaseline: { summary: baseline, knownToiletIds } }
+                {
+                    reuseBaseline: { summary: baseline, knownToiletIds },
+                    onRetry: (message) => onStatus?.(`${routeStatus}. ${message}`),
+                }
             )
 
             results.push(evaluateCandidate(candLat, candLng, baseline, result, priorityCategories))
@@ -295,6 +329,7 @@ export function useGisAnalytics() {
     ): Promise<OptimizationSummary | null> => {
         isOptimizing.value = true
         optimizationProgress.value = 0
+        optimizationStatus.value = 'Підготовка кандидатів…'
         const releaseWakeLock = await keepScreenAwake()
         try {
             // Кандидатна сітка ширша за географію контрольних точок, але не виходить за межі міської території.
@@ -313,10 +348,21 @@ export function useGisAnalytics() {
             )
 
             const initialToilets = getCombinedToilets(realToilets)
-            const initialBaseline = await evaluateControlPointsAccessibilityNetwork(
-                DNIPRO_CONTROL_POINTS,
-                initialToilets
-            )
+            const evaluateBaseline = (toilets: Toilet[], label: string) => {
+                let completed = 0
+                const status = () => `${label} · опрацьовано ${completed} із ${DNIPRO_CONTROL_POINTS.length} точок`
+                optimizationStatus.value = status()
+                return evaluateControlPointsAccessibilityNetwork(
+                    DNIPRO_CONTROL_POINTS,
+                    toilets,
+                    { onRetry: (message) => { optimizationStatus.value = `${status()}. ${message}` } },
+                    (current) => {
+                        completed = current
+                        optimizationStatus.value = status()
+                    }
+                )
+            }
+            const initialBaseline = await evaluateBaseline(initialToilets, 'Початкова доступність')
 
             const TARGET_COVERAGE_5_PERCENT = 80
             const MIN_COVERAGE_GAIN_PERCENT = 1
@@ -351,7 +397,7 @@ export function useGisAnalytics() {
                         address: `Optimization candidate ${i + 1}`,
                     })),
                 ]
-                baseline = await evaluateControlPointsAccessibilityNetwork(DNIPRO_CONTROL_POINTS, currentToilets)
+                baseline = await evaluateBaseline(currentToilets, 'Відновлення розрахунку')
             } else {
                 discardOptimizationCheckpoint()
             }
@@ -386,6 +432,8 @@ export function useGisAnalytics() {
                 const roundCandidates = [...candidates, ...deficitCandidates]
                 roundCandidates.forEach((c) => allCandidateKeys.add(`${c.latitude.toFixed(6)},${c.longitude.toFixed(6)}`))
 
+                const stepLabel = `Крок ${optimizationStep + 1}`
+                optimizationStatus.value = `${stepLabel} · Перевірка кандидатів`
                 const { ranked, evaluatedKeys } = await optimizeOneToiletPlacement(
                     currentToilets,
                     roundCandidates,
@@ -399,7 +447,8 @@ export function useGisAnalytics() {
                             99,
                             Math.round((progressRatio / (progressRatio + 1)) * 100)
                         )
-                    }
+                    },
+                    (message) => { optimizationStatus.value = `${stepLabel} · ${message}` }
                 )
                 evaluatedKeys.forEach((k) => evaluatedNodes.add(k))
 
@@ -438,10 +487,7 @@ export function useGisAnalytics() {
                     },
                 ]
 
-                baseline = await evaluateControlPointsAccessibilityNetwork(
-                    DNIPRO_CONTROL_POINTS,
-                    currentToilets
-                )
+                baseline = await evaluateBaseline(currentToilets, `Вибрано локацій: ${optimizationStep}. Перерахунок покриття`)
 
                 saveCheckpoint({
                     version: 1,
@@ -491,6 +537,7 @@ export function useGisAnalytics() {
             return null
         } finally {
             isOptimizing.value = false
+            optimizationStatus.value = ''
             isOptimizationOutdated.value = false
             await releaseWakeLock()
         }
@@ -578,6 +625,7 @@ export function useGisAnalytics() {
         isOptimizing,
         isOptimizationOutdated,
         optimizationProgress,
+        optimizationStatus,
         optimizationSummary,
         optimizationCheckpoint,
         discardOptimizationCheckpoint,
