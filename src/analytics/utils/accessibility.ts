@@ -104,14 +104,17 @@ const STRAIGHT_LINE_THRESHOLD_METERS = 180
 // HELPERS & CACHE
 // ==========================================================
 
-const OSRM_CACHE_STORAGE_KEY = 'etoilet_osrm_network_cache_v2'
+const OSRM_CACHE_STORAGE_KEY = 'etoilet_osrm_network_cache_v3'
+const LEGACY_OSRM_CACHE_STORAGE_KEY = 'etoilet_osrm_network_cache_v2'
 
 function loadInitialOsrmCache(): Map<string, { distanceMeters: number; durationSeconds: number } | null> {
     try {
-        const raw = localStorage.getItem(OSRM_CACHE_STORAGE_KEY)
+        const current = localStorage.getItem(OSRM_CACHE_STORAGE_KEY)
+        const raw = current ?? localStorage.getItem(LEGACY_OSRM_CACHE_STORAGE_KEY)
         if (raw) {
             const entries = JSON.parse(raw) as Array<[string, { distanceMeters: number; durationSeconds: number } | null]>
-            return new Map(entries)
+            // Older null entries could represent temporary failures. Keep only successful routes from v2.
+            return new Map(current === null ? entries.filter(([, route]) => route !== null) : entries)
         }
     } catch (e) {
         console.warn('[OSRM Cache] Error loading cache:', e)
@@ -153,7 +156,7 @@ async function fetchOsrmRouteRaw(
         const url = `${OSRM_BASE_URL}/${startLng},${startLat};${endLng},${endLat}?overview=false`
         const response = await fetch(url, { signal: controller.signal })
 
-        if (!response.ok) {
+        if (!response.ok && response.status !== 400) {
             if (response.status === 429 && retries > 0) {
                 console.warn('[OSRM] Rate limit hit. Waiting 3 seconds...')
                 onRetry?.('Сервер обмежив частоту запитів. Повтор маршруту за 3 с.')
@@ -161,14 +164,13 @@ async function fetchOsrmRouteRaw(
                 return fetchOsrmRouteRaw(startLng, startLat, endLng, endLat, retries - 1, onRetry)
             }
             console.warn(`[OSRM] HTTP Error ${response.status}`)
-            return null
+            return undefined
         }
 
         const data = (await response.json()) as OsrmRouteResponse
 
-        if (data.code !== 'Ok' || !data.routes?.length) {
-            return null
-        }
+        if (data.code === 'NoRoute') return null
+        if (!response.ok || data.code !== 'Ok' || !data.routes?.length) return undefined
 
         return {
             distanceMeters: Math.round(data.routes[0].distance),
@@ -185,7 +187,7 @@ async function fetchOsrmRouteRaw(
         }
 
         console.warn('[OSRM Network Request Failed]:', error)
-        return controller.signal.aborted ? undefined : null
+        return undefined
     } finally {
         clearTimeout(timeout)
     }
